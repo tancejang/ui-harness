@@ -1,0 +1,8 @@
+{
+  "apiVersion": 1,
+  "name": "android",
+  "version": "0.1.0",
+  "entry": "index.mjs",
+  "capabilities": ["capture", "check"],
+  "permissions": ["process", "project-read", "device"]
+}

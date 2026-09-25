@@ -1,0 +1,34 @@
+{
+  "name": "@uih/cli",
+  "version": "0.3.0",
+  "description": "Repo-aware visual UI refinement harness for web and mobile",
+  "type": "module",
+  "bin": {
+    "uih": "bin/uih.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "demo": "node examples/demo.mjs",
+    "test:unit": "node --test test/contracts-unit.test.mjs test/discrepancies.test.mjs test/scheduling.test.mjs test/hierarchy.test.mjs",
+    "test:integration": "node --test test/codex.test.mjs test/core.test.mjs test/extensions.test.mjs test/hardening.test.mjs test/provenance-integration.test.mjs test/review-contract.test.mjs test/workflows-integration.test.mjs",
+    "test:coverage": "node --experimental-test-coverage --test-coverage-exclude=\"test/**\" --test-coverage-exclude=\"**/.uih/**\" --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "sharp": "0.35.4"
+  },
+  "files": [
+    "bin",
+    "src",
+    "plugins",
+    "skills",
+    "examples",
+    "test",
+    "README.md",
+    "docs"
+  ],
+  "license": "UNLICENSED",
+  "private": true
+}

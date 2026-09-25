@@ -1,0 +1,1 @@
+{ "expo": { "name": "UIH Validation", "slug": "uih-validation", "version": "1.0.0", "orientation": "portrait", "android": { "package": "dev.uih.validation" } } }

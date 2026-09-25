@@ -1,0 +1,1 @@
+{ "apiVersion": 1, "name": "fixture", "version": "0.1.0", "entry": "index.mjs", "capabilities": ["plan", "build", "critic", "judge", "capture", "check", "generate", "design-review"], "permissions": ["project-read"] }

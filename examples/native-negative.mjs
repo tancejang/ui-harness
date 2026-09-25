@@ -1,0 +1,24 @@
+// Real negative interaction control, isolated from both Outfitory and the live fixture.
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import {fileURLToPath} from 'node:url';
+import {git,json,hash,writeJSON} from '../src/util.mjs';
+import {inspect} from '../src/project.mjs';
+import {install,loadExtensions,invoke} from '../src/extensions.mjs';
+const root=fileURLToPath(new URL('..',import.meta.url));
+const project=path.join(root,'.uih','negative-'+Date.now());
+const source=path.join(root,'.uih','native-validation');
+await git(root,'clone','--no-hardlinks',source,project);
+const config=await json(path.join(project,'uih.json'));
+if(config.runtime.options.dedicatedDevice!==true)throw new Error('This control requires the dedicated validation device');
+for(const plugin of ['metro-android','codex'])await install(project,'plugin',path.join(root,'plugins',plugin));
+const file=path.join(project,'src/Home.jsx'),original=await fs.readFile(file,'utf8');
+const broken=original.replace('onPress={() => setSaved(!saved)}','onPress={() => {}}');
+if(broken===original)throw new Error('Fixture button source changed; update negative-control mutation');
+await fs.writeFile(file,broken);
+const inventory=await inspect(project,config),revision=hash(JSON.stringify(inventory.files.map(f=>[f.path,f.sha256])));
+const result=await invoke(project,await loadExtensions(project),config.runtime,'check',{workspace:project,expectedRevision:revision,scenario:config.scenario},240000);
+await writeJSON(path.join(project,'.uih','negative-result.json'),result);
+const detected=result.passed===false&&result.checks.some(x=>x.name==='Save outfit'&&x.passed===false)&&result.observedRevision===revision;
+console.log(JSON.stringify({detected,project,result},null,2));
+if(!detected)process.exitCode=1;

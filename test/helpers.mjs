@@ -1,0 +1,30 @@
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import os from 'node:os';
+import sharp from 'sharp';
+import { fileURLToPath } from 'node:url';
+import { git, writeJSON } from '../src/util.mjs';
+import { defaults } from '../src/config.mjs';
+import { install } from '../src/extensions.mjs';
+export async function fixture() {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'uih-test-'));
+  await fs.mkdir(path.join(root, 'src'));
+  await fs.mkdir(path.join(root, 'references'));
+  await fs.writeFile(path.join(root, 'src/Home.tsx'), 'export const value = 0;\n');
+  await fs.writeFile(path.join(root, '.gitignore'), '.uih/\n');
+  const images = [];
+  for (const background of ['#aa0000', '#5555aa', '#333366', '#44aaff']) images.push((await sharp({ create: { width: 8, height: 8, channels: 3, background } }).png().toBuffer()).toString('base64'));
+  await fs.writeFile(path.join(root, 'references/home.png'), Buffer.from(images[3], 'base64'));
+  const config = structuredClone(defaults);
+  config.acceptance.judgeSamples=1;
+  config.scenario = { name: 'fixture', description: 'Synthetic orchestration test', width: 8, height: 8 };
+  config.runtime = { plugin: 'fixture', options: { images } };
+  for (const role of Object.keys(config.roles)) config.roles[role] = { plugin: 'fixture', options: { images }, reserveUSD: 0.1 };
+  config.budgets = { maxIterations: 3, localIterations: 1, maxMinutes: 5, maxUSD: 20, callTimeoutSeconds: 5 };
+  await writeJSON(path.join(root, 'uih.json'), config);
+  await install(root, 'plugin', fileURLToPath(new URL('./fixtures/plugin', import.meta.url)));
+  await git(root, 'init');
+  await git(root, 'config', 'user.name', 'UIH Test'); await git(root, 'config', 'user.email', 'test@localhost');
+  await git(root, 'add', '.'); await git(root, 'commit', '-m', 'fixture');
+  return { root, config, images };
+}
