@@ -1,28 +1,146 @@
 # UIH
 
-A standalone, repo-aware CLI for refining real UI against an approved mockup. Built for an eventual React Native/Metro integration with Outfitory; it does not depend on or modify Outfitory.
+**UIH (UI Harness)** is a repo-aware CLI for iteratively refining a real UI against an approved visual reference.
 
-**Status: 0.3 reliability candidate, not production-proven.** Live Codex OAuth critique/image generation and managed Metro/Android capture/interactions have been exercised on an isolated React Native fixture. See [validation evidence](docs/VALIDATION.md) for exact outcomes and remaining gates. iOS remains unverified, and no quality advantage over the Codex app has been demonstrated. See [benchmark plan](docs/BENCHMARK.md).
+Instead of asking an AI coding agent to "make this screen look like the mockup" and trusting a one-shot edit, UIH creates a controlled visual feedback loop:
 
-## Run locally
+**edit → render → capture → inspect → judge → accept/reject → repeat**
 
-Requires Node.js 22+, npm and Git. Android integration additionally requires ADB and a configured device. iOS execution needs a Mac or a runner connected to a Mac.
+It is currently aimed at React Native/Metro workflows, with runtime adapters that can also support other environments.
 
-```powershell
-cd F:\Work\uih
+> **Status: 0.3 reliability candidate, not production-proven.**
+>
+> Live Codex OAuth critique/image generation and managed Metro/Android capture/interactions have been exercised on an isolated React Native fixture. iOS remains unverified. UIH also has **not yet demonstrated a measured quality advantage over the Codex app**; see [docs/BENCHMARK.md](docs/BENCHMARK.md).
+
+---
+
+## Why UIH exists
+
+A normal AI coding agent can edit UI code, but visual work has a different failure mode from ordinary code generation: the agent can produce valid code that still looks wrong.
+
+Typical issues include:
+
+- spacing drifting from the mockup,
+- typography and wrapping changing unexpectedly,
+- a local fix making the full screen worse,
+- edits being judged from code instead of the rendered result,
+- stale screenshots being mistaken for the current source,
+- a model approving its own changes without an independent visual check,
+- regressions accumulating over several iterations.
+
+UIH treats the **rendered UI** as the thing being optimized, not just the source code.
+
+### Architecture
+
+```mermaid
+flowchart TD
+    A[Approved reference / design brief] --> C[UIH coordinator]
+    P[Project source + UIH config] --> C
+
+    C --> W[Isolated Git workspace]
+    W --> R[Runtime adapter<br/>Metro / Android / custom command]
+    R --> E[Rendered screenshot<br/>+ state/revision evidence]
+
+    E --> CR[Visual critic]
+    E --> J[Independent judge]
+    A --> CR
+    A --> J
+
+    CR --> B[Builder]
+    W --> B
+    B --> PE[Proposed source edits]
+
+    PE --> V[Validate file scope,<br/>hashes, paths and edit boundaries]
+    V --> W
+
+    J --> G{Acceptance gates}
+    R --> F[Functional checks]
+    F --> G
+
+    G -->|Improves locally and globally| K[Checkpoint best candidate]
+    G -->|Regression / blocker| X[Restore best checkpoint]
+
+    K --> C
+    X --> C
+
+    K --> O[Final screenshot,<br/>evidence, report and patch]
+```
+
+The coordinator owns the loop. Plugins do not directly mutate tracked source: builders return proposed edits, UIH validates them, applies them itself, renders the result, and evaluates the actual UI.
+
+### Why this can be stronger than a normal AI-agent loop for visual work
+
+| Normal AI coding agent | UIH |
+|---|---|
+| Often reasons mainly from source and a prompt | Re-renders the actual candidate after edits |
+| May make several changes before visual verification | Runs a repeated visual feedback loop |
+| Can self-judge its own implementation | Uses separate critic/builder/judge calls |
+| Usually edits the developer's working tree directly | Works in an isolated Git workspace |
+| A screenshot may not prove which source revision was rendered | Runtime evidence must match the expected source revision |
+| A component can improve while the full page regresses | Requires local and full-screen non-regression |
+| Failed attempts can leave partial edits behind | Rejects and restores the best accepted checkpoint |
+| Hard to inspect exactly why an iteration won or lost | Stores screenshots, crops, findings, scores, events and patches |
+| Often relies on subjective "looks better" reasoning | Combines model judgment, functional checks and explicit acceptance gates |
+
+This is an **architectural advantage, not yet a benchmark claim**. UIH's own judge scores cannot prove UIH is better than another tool. A real comparison requires blind human evaluation across repeated trials; the benchmark plan is in [docs/BENCHMARK.md](docs/BENCHMARK.md).
+
+---
+
+## What UIH does
+
+A refinement run can:
+
+1. freeze the committed starting point, reference image, config and installed extensions;
+2. discover editable source and map visual regions to component-owned files;
+3. capture the baseline UI and verify functional behavior;
+4. ask a critic to identify visual problems;
+5. ask a builder for scoped source edits;
+6. apply only validated edits;
+7. render the candidate from the isolated workspace;
+8. run functional checks;
+9. judge component-level and full-screen visual quality/fidelity;
+10. keep the change only when it passes the configured acceptance rules;
+11. restore the best checkpoint after rejection, interruption or failure;
+12. produce a report and `changes.patch` for human review.
+
+Pixel difference is recorded only as a diagnostic. It does **not** determine whether a change is accepted.
+
+---
+
+## Quick start
+
+### Requirements
+
+- Node.js 22+
+- npm
+- Git
+- Android workflows: ADB and a configured device/emulator
+- iOS execution: a Mac, or a runner connected to one
+
+Install dependencies and run the test/demo flow:
+
+```sh
 npm ci
 node bin/uih.mjs --help
 npm test
 npm run demo
 ```
 
-The demo creates a temporary synthetic Git project, accepts an improvement, rejects a regression, and produces an HTML report and patch. Its images and scores are deterministic test fixtures, not evidence of AI design quality. The output prints the report path.
+The demo creates a temporary synthetic Git project, accepts an improvement, rejects a regression, and produces an HTML report plus patch.
 
-To expose `uih` on your shell PATH, run `npm link` in this directory. Alternatively use `node F:\Work\uih\bin\uih.mjs` followed by the commands below.
+Its screenshots and scores are deterministic test fixtures; they are not evidence of AI design quality.
 
-## Connect a project later
+To expose `uih` on your PATH:
 
-Run from your app's Git root:
+```sh
+npm link
+```
+
+---
+
+## Connect a project
+
+From the target application's Git root:
 
 ```sh
 uih init --platform react-native
@@ -31,39 +149,175 @@ uih plugin install builtin:metro-android
 uih skill install builtin:visual-quality
 ```
 
-Edit `uih.json`:
+Then configure `uih.json`.
 
-- Set `sourceRoots` to the smallest complete set of screen, child component, and shared-style sources. Discovery reads tracked sources and heuristic import edges; it is not a framework compiler or a complete static dependency graph.
-- Set `editable` to allowed existing files or directory prefixes ending in `/`. Local tasks can change only their component-owned subset. Full-screen tasks can change any editable file.
-- Set scenario name, product/behavior requirements, and exact screenshot width/height in **physical pixels**. Account for device status/navigation bars explicitly. One invocation evaluates one scenario at one size.
-- Use your saved Codex ChatGPT OAuth login: run `codex login` if needed, then `uih auth status`. UIH never reads or copies OAuth tokens. All model roles default to the `codex` plugin; optional `options.model` selects a Codex reasoning model for a role. The designer invokes the built-in image-generation tool through that reasoning model; do not put a GPT Image model name in `options.model`.
-- Bound subscription usage with `--calls`, `--minutes`, and `--iterations`. Calls count every plugin invocation (including runtime checks/capture), and are persisted before execution. Codex usage follows your subscription/account limits; zero dollar reservations do not mean free or unlimited usage. Token usage is recorded when Codex reports it. The legacy `reserveUSD`/`--budget-usd` fields remain optional accounting limits for custom providers, not Codex billing estimates.
-- Configure runtime preparation, screen assertions, and meaningful functional checks.
+Important fields:
 
-All plugins are **trusted executable code**, running with your local user permissions. Manifest permissions are declarations, not an operating-system sandbox. Hash pinning detects changes after installation; it does not establish trust. Plugins inherit the process environment, including credentials. Install only packages you trust. Codex receives the selected source context, screenshots, requirements and installed skill content. Its subprocess strips API-key/access-token overrides, checks for ChatGPT login, and forces ChatGPT authentication. There is no API fallback.
+- **`sourceRoots`** — the smallest complete set of screens, child components and shared style sources.
+- **`editable`** — existing files or directory prefixes UIH may modify.
+- **scenario** — the screen/state being tested, including the exact screenshot width/height in physical pixels.
+- **requirements** — product, behavior and implementation constraints.
+- **runtime** — how UIH prepares, renders, captures and functionally checks the candidate.
+- **roles** — planner, critic, builder, judge and designer providers.
+- **budgets** — call, time, iteration and optional custom-provider cost limits.
+- **acceptance** — visual quality, fidelity, minimum-improvement and judge-stability rules.
 
-### Codex OAuth execution
+Discovery uses tracked files and heuristic import edges. It is not a complete framework compiler or static dependency graph.
 
-UIH uses the installed Codex CLI, which owns sign-in, credential storage and refresh. It checks `codex login status` and refuses API-key authentication. Sign in through `codex login`; no client secret, API key, or token import is needed. The existing app login can be reused when the CLI shares that saved login, as verified by the status command.
+---
 
-Each role runs a fresh `codex exec` with schema-constrained output and image attachments. The process uses a temporary directory, ignores user runtime configuration, forces the OpenAI provider and ChatGPT login, and disables approval prompts. Project source is supplied as data. All turns use read-only execution. The built-in image tool saves its own artifacts; UIH reads the returned PNG only from the Codex generated-images directory or its own temporary directory, with path, freshness and file-type checks. UIH applies validated edit proposals itself.
+## Codex OAuth execution
 
-The plugin inherits the existing `CODEX_HOME` for Codex-managed auth, but never reads its credential files. User-config hooks/MCP settings are not loaded. Codex built-in defaults apply unless `options.model` and/or `options.reasoningEffort` are explicitly configured. For a CLI outside PATH, set `options.command` to an executable/argument array, such as `["C:/path/to/codex.exe"]` or `["node", "C:/path/to/codex.js"]`.
+UIH uses the installed Codex CLI and its existing ChatGPT sign-in.
 
-Built-in image generation is enabled per generation call. If unavailable, blocked or rate limited, the operation fails explicitly. UIH does not request API credentials or draw a substitute image. Native generated dimensions are preserved; reference import maps compatible dimensions as described below.
+```sh
+codex login
+uih auth status
+```
 
-Opt-in live smoke checks (consume subscription usage):
+UIH does not read or copy OAuth tokens. The Codex CLI owns authentication, credential storage and refresh.
+
+Each model role runs through a fresh schema-constrained `codex exec` call. Source context, screenshots, requirements and installed skill content are supplied as data. The turns are read-only; UIH itself applies validated edit proposals.
+
+The Codex subprocess:
+
+- checks for ChatGPT login,
+- strips API-key/access-token overrides,
+- forces the OpenAI provider and ChatGPT authentication,
+- disables approval prompts,
+- ignores user runtime configuration/hooks/MCP settings,
+- validates generated image paths and freshness before importing artifacts.
+
+There is no API-key fallback.
+
+Optional live smoke checks, which consume subscription usage:
 
 ```sh
 node examples/codex-smoke.mjs
 node examples/codex-smoke.mjs --generate
 ```
 
-To migrate an earlier UIH config: install `builtin:codex`, change every model role to `"plugin":"codex", "options":{}, "reserveUSD":0`, add `budgets.maxCalls`, and run `uih auth status`. Start a new refinement run: old run extension snapshots remain frozen and are not silently migrated.
+Codex usage follows the limits of the signed-in account. Zero-dollar reservations do **not** imply free or unlimited usage.
 
-### Android and Metro
+---
 
-`metro-android` manages Expo Go on a configured Android test device. It starts Metro for the isolated workspace, forwards a unique port through ADB, launches Expo Go, waits for a source-revision marker, checks content, and stops its Metro process afterward. A process lock serializes use of the same device across UIH projects.
+## Design and approve a reference
+
+UIH can generate candidate reference designs before implementation:
+
+```sh
+uih reference generate --brief brief.md --out drafts/home.png --candidates 3 --calls 6
+uih reference import drafts/home.png
+```
+
+Generation and implementation acceptance are intentionally separate.
+
+The design flow:
+
+1. generates a candidate;
+2. sends it through an independent design-review call;
+3. feeds findings into the next candidate;
+4. selects the highest-scoring non-blocking candidate;
+5. records every candidate, review and reservation;
+6. waits for **human review/import** before the image becomes the approved reference.
+
+You can also import an existing PNG.
+
+Reference import preserves the original and records hashes, dimensions and any fit transform. UIH does not silently stretch or crop mismatched references.
+
+---
+
+## Run visual refinement
+
+Commit the intended application starting point first. UIH rejects dirty tracked state or untracked editable source because each run snapshots Git HEAD.
+
+Useful commands:
+
+```sh
+uih doctor
+uih inspect
+uih run --iterations 12 --local-iterations 2 --minutes 30 --calls 100
+uih review latest
+uih resume <run-id> --iterations 20 --minutes 60 --calls 150
+```
+
+Resume limits are new **total** limits, not extra allowances.
+
+A refinement cycle is roughly:
+
+```text
+best accepted source
+      │
+      ▼
+visual critique
+      │
+      ▼
+scoped builder proposal
+      │
+      ▼
+validated source edits
+      │
+      ▼
+functional checks
+      │
+      ▼
+fresh runtime capture
+      │
+      ├── component judge
+      │
+      └── full-screen judge
+              │
+              ▼
+        accept or reject
+              │
+      ┌───────┴────────┐
+      ▼                ▼
+ checkpoint        restore best
+      │                │
+      └────── repeat ──┘
+```
+
+By default each visual evaluation uses two judge samples. UIH takes the lower score in each dimension, blocks acceptance when any sample is blocking, and rejects unstable judgment when score spread exceeds the configured threshold.
+
+A candidate must preserve functionality and avoid visual regression. Component-scoped work is also checked against the whole screen so a locally improved button/card cannot silently make the page worse.
+
+When blocking full-screen problems remain, UIH prioritizes a whole-screen repair before returning to narrower component scopes.
+
+---
+
+## Acceptance model
+
+At a high level, a candidate is retained only when:
+
+- functional checks pass;
+- the candidate has no blocking visual finding;
+- component quality/fidelity do not regress for local work;
+- full-screen visual quality does not regress;
+- full-screen fidelity does not regress;
+- the configured minimum improvement is reached, or a blocking issue is removed without introducing a new blocker.
+
+The best accepted state is checkpointed in Git. Rejected candidates are discarded and the workspace is restored.
+
+This makes the optimization loop conservative by design. It can reject useful trade-offs, so benchmark results should guide any relaxation of the acceptance policy.
+
+---
+
+## Android + Metro runtime
+
+The built-in `metro-android` adapter manages Expo Go on a configured Android test device.
+
+It can:
+
+- start Metro for the isolated workspace;
+- use a unique forwarded port through ADB;
+- launch Expo Go;
+- verify that the app loaded the expected source revision;
+- assert expected screen content;
+- perform configured interactions;
+- capture a PNG;
+- stop the Metro process afterward.
+
+Example:
 
 ```json
 {
@@ -73,21 +327,33 @@ To migrate an earlier UIH config: install `builtin:codex`, change every model ro
     "dependenciesPath": "C:/prepared-app/node_modules",
     "expectedTexts": ["Home"],
     "interactions": [
-      {"name":"Save outfit", "tap":"save-outfit", "expectText":"Saved"}
+      {
+        "name": "Save outfit",
+        "tap": "save-outfit",
+        "expectText": "Saved"
+      }
     ]
   }
 }
 ```
 
-Install matching Expo Go and prepare dependencies beforehand. The app must import the adapter-written `.uih/runtime/revision.json` and render `testID with the value uih-revision- followed by proof.revision` on a non-collapsible native view. See `examples/react-native-home/src/Home.jsx`. Metro must resolve the prepared dependency directory; the fixture includes a config for this. `tap` addresses a testID, accessibility description, or exact text; `expectText` must appear after the action.
+The app must expose UIH's revision marker so the adapter can prove the rendered UI corresponds to the current candidate source.
 
-Expo Go can reuse cached updates. For a **dedicated disposable test client only**, configure both `dedicatedDevice: true` and `resetAppData: true` to clear that package's data before each operation. This deletes its stored projects, login/state and settings; never enable it for a shared development client. The default is false. A stale bundle fails revision verification. Expo Go chrome can appear in captures; this adapter does not yet provide a clean standalone release-build capture. Custom native modules/dev clients and iOS need a separate adapter.
+For the reference fixture, see:
 
-For Expo Go 57 test captures, `hideToolsButton: true` uses the native developer-menu setting to hide its floating Tools control, then verifies the overlay is absent and the source marker remains visible. It does not edit or mask screenshot pixels. An unsupported menu fails explicitly. This is still an Expo Go capture, not a standalone release-build test.
+```text
+examples/react-native-home/src/Home.jsx
+```
 
-The legacy `android` adapter supports project-owned preparation scripts:
+Expo Go may reuse cached updates, so stale-source detection is important. A stale revision fails the run instead of being accepted as valid evidence.
 
-The Android adapter requires `serial`, `prepare`, `expectedTexts`, and `checks`:
+The adapter still captures Expo Go rather than a standalone release build. Custom native modules, dev clients and iOS need another runtime adapter.
+
+---
+
+## Legacy Android runtime
+
+The legacy `android` adapter supports project-owned preparation and check scripts:
 
 ```json
 {
@@ -98,85 +364,120 @@ The Android adapter requires `serial`, `prepare`, `expectedTexts`, and `checks`:
     "expectedTexts": ["Home"],
     "settleMs": 800,
     "checks": [
-      { "name": "home behavior", "command": ["node", "scripts/uih-check.mjs"] }
+      {
+        "name": "home behavior",
+        "command": ["node", "scripts/uih-check.mjs"]
+      }
     ]
   }
 }
 ```
 
-Those scripts are **project-specific contracts to implement**, not files supplied by UIH. They run in the isolated workspace. Preparation must ensure dependencies are available, serve/build **that workspace**, rebuild/reload the device, seed deterministic data, reach the requested screen and return after readiness. A long-running Metro command must not be used directly as a blocking prepare step. Your preparation helper owns its Metro process lifecycle and must reuse/restart it for this workspace and clean it up. Check scripts must verify the current candidate, including required interactions, and exit nonzero on failure.
+Those scripts belong to the target project; UIH does not generate them.
 
-The adapter runs preparation before every capture/check and provides `UIH_EXPECTED_REVISION` to preparation commands. The app must expose `uih-revision-<hash>` in its hierarchy (or configure `revisionLabel` with `{revision}`). It rejects stale source, checks expected labels, and captures a PNG through `adb exec-out`. The marker proves which instrumented source was rendered; meaningful interaction assertions are still required.
+Preparation is responsible for rendering the isolated workspace, reaching the requested screen, seeding deterministic state and returning only after the runtime is ready.
 
-### Other runtimes
+---
 
-Install `builtin:command-runtime` for web, iOS, Flutter, or existing automation. It supports command arrays with `{workspace}`, `{screenshot}`, `{evidence}` and `{revision}` placeholders. Your runner must render the current workspace, establish the scenario, write the PNG to `{screenshot}`, and write JSON containing `stateEvidence`, `observedRevision` and optionally `hierarchy` to `{evidence}`. Check commands must also write revision evidence. Observe the revision from the app; do not merely echo the supplied value. Each capture gets unique temporary outputs, avoiding accidental reuse of the previous screenshot.
+## Other runtimes
+
+Install `builtin:command-runtime` for web, iOS, Flutter or existing automation.
 
 ```json
 {
   "plugin": "command-runtime",
   "options": {
-    "capture": [["node", "scripts/capture-ui.mjs", "--image", "{screenshot}", "--evidence", "{evidence}"]],
-    "checks": [{ "name": "screen interactions", "command": ["node", "scripts/check-ui.mjs"] }]
+    "capture": [
+      [
+        "node",
+        "scripts/capture-ui.mjs",
+        "--image",
+        "{screenshot}",
+        "--evidence",
+        "{evidence}"
+      ]
+    ],
+    "checks": [
+      {
+        "name": "screen interactions",
+        "command": ["node", "scripts/check-ui.mjs"]
+      }
+    ]
   }
 }
 ```
 
-This is an integration interface, not turnkey built-in Playwright, SwiftUI, or Flutter automation. Commands use argument arrays with no implicit shell. On Windows use actual executables (`node`, `adb`, etc.); `.cmd` launchers need an explicit shell wrapper you control. No command string interpolation is performed by UIH.
+The runner must:
 
-## Design and approve the reference
+1. render the current isolated workspace;
+2. establish the requested scenario;
+3. write the PNG to `{screenshot}`;
+4. write evidence JSON to `{evidence}`;
+5. report the observed source revision;
+6. run meaningful checks against that same candidate.
 
-```sh
-uih reference generate --brief brief.md --out drafts/home.png --candidates 3 --calls 6
-uih reference import drafts/home.png
-```
+The revision must be observed from the app/runtime. Merely echoing the revision supplied by UIH is not valid evidence.
 
-Generation uses the designer and an independent design-review call. Later candidates receive previous critique; the highest-scoring nonblocking candidate is copied to the requested output. Every candidate, review, reservation and selected result is recorded beside it. **The result remains unapproved until you review and import it.** You can import another candidate instead.
+---
 
-Generated candidates retain their native dimensions. Import defaults to proportional `--fit uniform-scale` when aspect ratios match within one-pixel rounding; it never stretches or crops. Use `--fit strict` to require exact dimensions. Different aspect ratios require a new reference or explicit `--fit contain` padding, followed by review of the mapped result. Import preserves the original as `.original.png` and writes `.reference.json` with hashes, dimensions and the transform. Put brand, fonts, real assets, content, behavior requirements and implementation constraints in the brief. A generated raster is not automatically a font/asset package; assets must be prepared separately.
+## Reports and evidence
 
-Alternatively import an existing PNG. Existing references are not overwritten. To revise one, choose a new `reference` path in the config and import a new version.
+Each attempt can retain:
 
-## Refine implementation
+- rendered screenshots;
+- component crops;
+- visual diff diagnostics;
+- critic findings;
+- judge samples;
+- visual quality and fidelity scores;
+- functional-check results;
+- proposed edits;
+- rejection reasons;
+- source revision evidence;
+- event history;
+- best checkpoint;
+- final `changes.patch`.
 
-Commit the intended app starting point, configuration and extension lock. `.uih/` is ignored by `init`. Installed extension files are local; reinstall the same packages on another machine. Uncommitted tracked changes or untracked editable source files are rejected, because a run snapshots Git HEAD.
-
-```sh
-uih doctor
-uih inspect
-uih run --iterations 12 --local-iterations 2 --minutes 30 --calls 100
-uih review latest
-uih resume <run-id> --iterations 20 --minutes 60 --calls 150
-```
-
-CLI budgets on resume are **new total limits**, not additional allowances. Time counts active execution; after an unclean crash, time since the last active start is conservatively charged, including downtime. Iterations and cost reservations are never reset. `doctor` checks configuration and saved Codex login status, not model access or device freshness.
-
-The loop:
-
-1. Clone committed source into a UIH-owned isolated workspace and freeze the reference/config/extensions.
-2. Map reference regions to actual editable files, save component crops and ownership constraints.
-3. Capture the baseline, require functional checks, and independently evaluate visual quality and fidelity.
-4. Start with a full-screen layout pass, then run the configured number of local critique/build/judge passes per component; repeat with a full-screen pass.
-5. Apply only validated proposed edits. Enforce file scope, content hashes, path containment and existing-file boundaries.
-6. Require functional checks, local improvement where applicable, **and full-screen improvement without regression in either score** before retaining a candidate.
-7. Restore the best accepted checkpoint after rejection, interruption or failure. Stop at both score thresholds or a budget limit.
-
-Every attempt has its own screenshots, crop comparisons, visual diagnostics, findings and decision. The report includes reference/baseline/best images and an accepted `changes.patch`. Pixel error is diagnostic only; it never determines acceptance. Judges run in separate calls without builder rationale or previous scores. By default each evaluation has two samples; the lowest score in each dimension is used, any blocking sample blocks acceptance, and score spread above 12 blocks acceptance. Configure `acceptance.judgeSamples` and `maxJudgeSpread`. Repetition reduces some instability but is not an independent human assessment.
-
-When the best screen still has a blocking visual failure, UIH prioritizes a whole-screen repair before narrower component work. These repairs consume the same attempt, call and time budgets and must pass the unchanged acceptance gates. Once the screen is unblocked, the component cycle starts from its first scope. Rejected proposal code accompanies rejection findings and screenshots so the builder can correct a promising failed candidate without silently retaining it. Interrupted scopes are recorded on resume and their consumed budgets are not refunded.
-
-For an explicit divide-and-conquer trial, set `acceptance.requireComponentCycle: true`. Even if an early full-screen pass meets score thresholds, UIH continues until every planned component has a local and global evaluation and a subsequent full-screen pass is evaluated. Budget limits still apply; failed or interrupted attempts do not count as completed reviews.
-
-`uih calibrate suite.json --repeats 3 --calls 30 --minutes 20` tests predeclared rankings against repeated judge calls without revealing case labels or expected ranks to the judge. See [calibration format](docs/CALIBRATION.md). Use it before trusting a model/configuration for optimization.
-
-Review the patch and apply it yourself from the original starting revision:
+Review the patch manually before applying it to the original project:
 
 ```sh
 git apply --check <path-to-changes.patch>
 git apply <path-to-changes.patch>
 ```
 
-UIH does not merge, publish, or deploy. Exit codes: `0` success/quality thresholds met; `1` failure; `2` budget or iteration limit with targets unmet. Reports distinguish these outcomes.
+UIH does not merge, publish or deploy application code.
+
+Exit codes:
+
+- `0` — configured quality thresholds met;
+- `1` — failure;
+- `2` — budget/iteration limit reached before targets were met.
+
+---
+
+## Calibration
+
+Before trusting an evaluator/model configuration for optimization, test it on known visual rankings:
+
+```sh
+uih calibrate suite.json --repeats 3 --calls 30 --minutes 20
+```
+
+Good calibration cases include:
+
+- spacing offsets;
+- wrong font weights;
+- missing actions;
+- clipping;
+- image substitutions;
+- alignment improvements;
+- a fake screenshot pasted over a non-functional page.
+
+The last case is particularly important: visual similarity must not bypass functional checks.
+
+See [docs/CALIBRATION.md](docs/CALIBRATION.md).
+
+---
 
 ## Extensions
 
@@ -186,19 +487,61 @@ uih skill install ./my-skill
 uih extensions
 ```
 
-Local directory installation copies and pins a semantic version and SHA-256 tree hash in `uih.lock.json`. No install hooks run. An updated package requires an explicit reinstall. Plugin capabilities and integrity are checked before and after dispatch. A watchdog stops plugin subprocesses when the coordinator disappears. No registry, remote installer, or Codex-format compatibility is claimed. See [protocol](docs/EXTENSIONS.md).
+Local extension installation copies the package and pins its semantic version plus SHA-256 tree hash in `uih.lock.json`.
 
-## Reliability boundaries and next work
+Plugins are trusted executable code. Manifest permissions are declarations, **not an OS sandbox**. Plugins inherit the process environment and local-user permissions.
 
-- Single coordinator and sequential component passes; no concurrent file edits. One active run per project is locked. The managed Android adapter also locks its device; custom adapters need equivalent coordination.
-- Existing text files only; no autonomous dependency installation, asset extraction, file creation/deletion, or source migration.
-- No automatic retries or API fallback for failed or rate-limited Codex turns. Resume restarts from the best checkpoint and counts an interrupted attempt against the budget.
-- Hashes and scope checks protect against mistakes; trusted plugins can access the host. No security sandbox or untrusted-plugin guarantee.
-- Strict score nonregression can reject useful tradeoffs and impede convergence. Benchmark before relaxing the rule.
-- Representative-app trials, physical-device/iOS validation, human judge calibration, multiple scenario regression suites, asset generation, and a measured comparison with Codex remain necessary before production claims.
+Hash pinning detects extension changes after installation; it does not establish that an extension is trustworthy.
 
-Official Codex references: [authentication](https://learn.chatgpt.com/docs/auth), [non-interactive execution and structured outputs](https://learn.chatgpt.com/docs/non-interactive-mode), and [built-in image generation](https://learn.chatgpt.com/docs/image-generation).
+See [docs/EXTENSIONS.md](docs/EXTENSIONS.md).
 
-See [evidence-based review and verification](docs/EVIDENCE-REVIEW.md) for discrepancy tracking, frozen measurements, approval freshness, and `uih verify`.
+---
 
-See [testing](docs/TESTING.md) for unit, integration, coverage, and live-device acceptance workflows.
+## Reliability boundaries
+
+Current intentional limits:
+
+- one coordinator with sequential component passes;
+- one active run per project;
+- no concurrent source edits;
+- managed Android adapter locks its device;
+- edits are limited to existing text files;
+- no autonomous dependency installation;
+- no autonomous source-file creation/deletion;
+- no automatic API fallback;
+- no automatic retry of failed/rate-limited Codex turns;
+- custom runtimes are responsible for equivalent coordination and revision evidence;
+- iOS is not yet verified;
+- Expo Go capture is not equivalent to standalone release-build validation;
+- a measured quality advantage over normal Codex workflows has not yet been established.
+
+Production readiness still requires representative-app trials, physical-device/iOS validation, human evaluator calibration, multi-scenario regression suites and repeated benchmark comparisons.
+
+---
+
+## Security model
+
+UIH adds guardrails around source mutation, but it is **not a security sandbox**.
+
+The coordinator checks that plugins do not directly alter tracked source or Git history during model/runtime calls. Builder proposals are validated for allowed files, source hashes, path containment and existing-file boundaries before UIH applies them.
+
+That protects against accidental out-of-scope edits.
+
+It does **not** make an untrusted plugin safe to execute.
+
+---
+
+## Further reading
+
+- [Validation evidence](docs/VALIDATION.md)
+- [Benchmark plan](docs/BENCHMARK.md)
+- [Calibration format](docs/CALIBRATION.md)
+- [Evidence review and verification](docs/EVIDENCE-REVIEW.md)
+- [Testing](docs/TESTING.md)
+- [Extension protocol](docs/EXTENSIONS.md)
+
+Official Codex references:
+
+- [Authentication](https://learn.chatgpt.com/docs/auth)
+- [Non-interactive execution and structured outputs](https://learn.chatgpt.com/docs/non-interactive-mode)
+- [Built-in image generation](https://learn.chatgpt.com/docs/image-generation)
