@@ -177,7 +177,13 @@ function mix(a, b, t) {
   return '#' + p.map(v => v.toString(16).padStart(2, '0')).join('');
 }
 
-/** Rotate a hex colour's hue by `deg`, keeping saturation and value. */
+/**
+ * Rotate a hex colour's hue by `deg`, keeping saturation and value.
+ *
+ * Segment lookup is clamped rather than computed with a bare `% 6`. Floating point can put
+ * `h` a hair outside [0, 360) (e.g. 359.99999999999994 + rounding), and `Math.floor(h/60)`
+ * can then index off the end of the array and throw. Clamping makes the function total.
+ */
 function rotateHue(hex, deg) {
   let r = parseInt(hex.slice(1, 3), 16) / 255;
   let g = parseInt(hex.slice(3, 5), 16) / 255;
@@ -188,12 +194,14 @@ function rotateHue(hex, deg) {
   else if (mx === r) h = (((g - b) / d) % 6 + 6) % 6;
   else if (mx === g) h = (b - r) / d + 2;
   else h = (r - g) / d + 4;
-  h = (h * 60 + deg) % 360; if (h < 0) h += 360;
+  h = (h * 60 + deg) % 360;
+  if (h < 0) h += 360;
+  if (!Number.isFinite(h)) h = 0;
   const s = mx === 0 ? 0 : d / mx;
   const c = mx * s, x = c * (1 - Math.abs(((h / 60) % 2) - 1)), m = mx - c;
-  const seg = Math.floor(h / 60) % 6;
+  const seg = Math.min(5, Math.max(0, Math.floor(h / 60)));
   const rgb = [[c, x, 0], [x, c, 0], [0, c, x], [0, x, c], [x, 0, c], [c, 0, x]][seg];
-  const to = v => Math.round((v + m) * 255);
+  const to = v => Math.min(255, Math.max(0, Math.round((v + m) * 255)));
   return '#' + rgb.map(to).map(v => v.toString(16).padStart(2, '0')).join('');
 }
 

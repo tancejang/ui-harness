@@ -17,6 +17,12 @@
 
 import { renderSpec, cleanSpec, applyDefect, clone, RENDER_SCALE } from './fixture.mjs';
 import { classify, measurePair, decide } from './judge.mjs';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const BAND = JSON.parse(await fs.readFile(path.join(HERE, 'eval-band.json'), 'utf8'));
 
 const CLASSES = ['geometry', 'typography', 'spacing', 'color', 'imagery', 'clean'];
 const LABELS = CLASSES;
@@ -110,18 +116,24 @@ async function main() {
 
   const refPng = await renderSpec(cleanSpec(), { scale: SCALE });
 
-  // TRAIN: 4 per class, HIGH severity 0.75..1.00 — the "obvious defect" regime.
-  //   Thresholds in judge.mjs were tuned against this split only.
-  // EVAL (held out): 4 per class, LOW severity 0.06..0.11 — a different regime entirely.
-  //   Chosen from bench/difficulty.mjs: below mag 0.12 the judge measurably breaks, so
-  //   this band is where the remaining capability gaps live.
+  // The bands live in eval-band.json so run.mjs, seed-sweep.mjs and difficulty.mjs cannot
+  // drift apart. Earlier they each carried their own copy, which is how a stale sweep kept
+  // reporting a saturated result for a band that had already moved.
+  const { band: EVAL_BAND, trainBand: TRAIN_BAND, casesPerClass: PER, sweepSeeds: N_SWEEP } = BAND;
+
+  // TRAIN: HIGH severity — the "obvious defect" regime, where the judge's thresholds were set.
+  // EVAL (held out): LOW severity — a different regime, re-derived with bench/difficulty.mjs
+  // each time the previous band became saturated. A saturated band cannot drive improvement,
+  // so the band is moved down to wherever the judge measurably breaks.
   //
   // The headline eval number is the MEAN over a seed sweep, not a single split. A single
-  // split can be a lucky draw: seed 97 scores 1.0000 while the 30-seed mean is ~0.964.
-  // Reporting one seed would repeat exactly the mistake this benchmark was built to fix.
-  const trainRaw = buildSplit(4, [0.75, 1.0], 11).map(c => ({ ...c, refPng }));
-  const evalRaw = buildSplit(4, [0.06, 0.11], 97).map(c => ({ ...c, refPng }));
-  const SWEEP_SEEDS = Array.from({ length: 12 }, (_, i) => (i + 1) * 7 + 90);
+  // split can be a lucky draw: on the original band seed 97 scored 1.0000 while the 30-seed
+  // mean was 0.964. Reporting one seed would repeat exactly the mistake this benchmark was
+  // built to fix, so the single-split figure is printed alongside the sweep mean, never
+  // instead of it.
+  const trainRaw = buildSplit(PER, TRAIN_BAND, 11).map(c => ({ ...c, refPng }));
+  const evalRaw = buildSplit(PER, EVAL_BAND, 97).map(c => ({ ...c, refPng }));
+  const SWEEP_SEEDS = Array.from({ length: N_SWEEP }, (_, i) => (i + 1) * 7 + 90);
 
   const train = await evaluate(trainRaw, SCALE);
   const evalSet = await evaluate(evalRaw, SCALE);
@@ -144,7 +156,7 @@ async function main() {
   const sweepClassFail = Object.fromEntries(LABELS.map(l => [l, 0]));
   const sweepClassTot = Object.fromEntries(LABELS.map(l => [l, 0]));
   for (const seed of SWEEP_SEEDS) {
-    const cases = buildSplit(4, [0.06, 0.11], seed).map(c => ({ ...c, refPng }));
+    const cases = buildSplit(PER, EVAL_BAND, seed).map(c => ({ ...c, refPng }));
     for (const c of cases) {
       const png = await renderSpec(c.spec, { scale: SCALE });
       const r = await classify(refPng, png);

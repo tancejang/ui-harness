@@ -106,14 +106,25 @@ export async function greyRampCount(png) {
 
 /**
  * CO-5: greys don't have to be grey — measure the hue offset of near-neutral colours.
- * Returns { meanHue, spread, count }. Pure neutral greys give no hue at all.
+ *
+ * Antialiased edges borrow hue from whatever they sit against, so sampling every
+ * semi-desaturated pixel reports the accent colour's hue rather than the grey ramp's
+ * temperature. We therefore only sample pixels that sit in the INTERIOR of a flat region
+ * (all four neighbours nearly identical), which excludes edges by construction.
  */
 export async function greyTemperature(png) {
-  const { data } = await raw(png);
+  const { data, W, H } = await raw(png);
   const hues = [];
-  for (let i = 0; i < data.length; i += 3 * 7) {
-    const { h, s } = rgbToHsl([data[i], data[i + 1], data[i + 2]]);
-    if (s > 0.02 && s < 0.16) hues.push(h);
+  const step = 3;
+  for (let y = step; y < H - step; y += 2) {
+    for (let x = step; x < W - step; x += 2) {
+      const c = at(data, W, x, y);
+      // Interior test: all 4 neighbours within a tight tolerance of this pixel.
+      const nb = [at(data, W, x + step, y), at(data, W, x - step, y), at(data, W, x, y + step), at(data, W, x, y - step)];
+      if (nb.some(p => Math.abs(lum(p) - lum(c)) > 3)) continue;
+      const { h, s } = rgbToHsl(c);
+      if (s > 0.02 && s < 0.16) hues.push(h);
+    }
   }
   if (!hues.length) return { meanHue: null, spread: 0, count: 0 };
   const mean = hues.reduce((a, b) => a + b, 0) / hues.length;
@@ -192,22 +203,34 @@ export function spacingSystem(gaps, minRatio = 1.25) {
   return { scale: uniq, violations, ok: violations.length === 0 };
 }
 
-/** LV-5: corner radii should cluster on a bounded set. */
+/**
+ * LV-5: corner radii should cluster on a bounded set.
+ *
+ * For each substantial flat region we walk along its top edge and count how far in from the
+ * left edge the region's own fill colour first appears. On a rounded rectangle the corner is
+ * cut away, so the fill starts `radius` pixels in; on a square corner it starts at 0.
+ *
+ * The earlier version compared the top-edge pixel to the region mean and broke out on the
+ * first background pixel, which always fired immediately and reported every radius as 0.
+ */
 export async function radiusCluster(png) {
   const { data, W, H } = await raw(png);
-  // Measure horizontal "cut" length at the top edge of each large region.
   const regs = regions(data, W, H).filter(r => r.area > W * H * 0.002 && fillRatio(r) > 0.5);
-  const cuts = [];
+  const radii = [];
   for (const r of regs) {
     const [x, y, w] = r.box;
+    // Skip regions that are clipped by the canvas edge (their corner is not visible).
+    if (x <= 0 || y <= 0) { radii.push(null); continue; }
     let cut = 0;
-    for (let dx = 0; dx < Math.min(w, 40); dx++) {
-      const p = at(data, W, x + dx, y);
-      if (contrastRatio(p, r.rgb) < 0.02) cut = dx + 1; else break;
+    const near = (a, b) => Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]) + Math.abs(a[2] - b[2]) < 24;
+    for (let dx = 0; dx < Math.min(w, 48); dx++) {
+      if (near(at(data, W, x + dx, y + 1), r.rgb)) { cut = dx; break; }
+      cut = dx + 1;
     }
-    cuts.push(cut);
+    radii.push(cut);
   }
-  return { radii: cuts, distinct: [...new Set(cuts)].length };
+  const visible = radii.filter(v => v !== null);
+  return { radii: visible, skipped: radii.length - visible.length, distinct: [...new Set(visible)].length };
 }
 
 export { rgbToHsl, lum, raw, regions };

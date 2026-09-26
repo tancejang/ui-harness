@@ -85,10 +85,24 @@ function textMass(data, W, H, region) {
   return count;
 }
 
-/** Dominant hue (degrees) over pixels that are saturated enough to have a hue. */
+/**
+ * Dominant hue over saturated pixels, as a CIRCULAR MEAN.
+ *
+ * The previous implementation histogrammed hue into 10-degree bins and returned the modal
+ * bin's centre. That quantises the answer: a hue rotation smaller than half a bin reads as
+ * exactly zero, which is why subtle `color` defects (mag <= 0.05) fell through to the
+ * geometric rules and were misreported as `geometry`.
+ *
+ * Averaging angles needs circular statistics — a plain arithmetic mean of 350deg and 10deg
+ * gives 180deg, the opposite of the truth. We accumulate unit vectors on the colour circle
+ * and take atan2 of the sums, which is exact and continuous.
+ *
+ * Returns { hue, concentration, n } where concentration = |R| in [0,1]. Low concentration
+ * means the pixels have no single well-defined hue (e.g. a multi-hue screen), so callers
+ * should not trust `hue` when concentration is small.
+ */
 function dominantHue(data, W, H) {
-  const hist = new Float64Array(36); // 10-degree bins
-  let n = 0;
+  let sx = 0, sy = 0, wsum = 0, n = 0;
   for (let i = 0; i < data.length; i += 3 * 7) { // stride-sample; deterministic
     const r = data[i] / 255, g = data[i + 1] / 255, b = data[i + 2] / 255;
     const mx = Math.max(r, g, b), mn = Math.min(r, g, b);
@@ -100,13 +114,20 @@ function dominantHue(data, W, H) {
     else if (mx === g) h = (b - r) / d + 2;
     else h = (r - g) / d + 4;
     h *= 60; if (h < 0) h += 360;
-    hist[Math.floor(h / 10) % 36] += 1;
+    const rad = h * Math.PI / 180;
+    // Weight by saturation so strongly coloured pixels dominate the mean, and so a few
+    // lightly tinted antialiased pixels cannot drag the estimate.
+    const w = sat;
+    sx += Math.cos(rad) * w;
+    sy += Math.sin(rad) * w;
+    wsum += w;
     n++;
   }
-  if (n === 0) return { hue: -1, share: 0, n: 0 };
-  let best = 0;
-  for (let k = 1; k < 36; k++) if (hist[k] > hist[best]) best = k;
-  return { hue: best * 10 + 5, share: hist[best] / n, n };
+  if (n === 0 || wsum === 0) return { hue: -1, concentration: 0, n: 0 };
+  const cx = sx / wsum, cy = sy / wsum;
+  let hue = Math.atan2(cy, cx) * 180 / Math.PI;
+  if (hue < 0) hue += 360;
+  return { hue, concentration: Math.hypot(cx, cy), n };
 }
 
 /** Mean colour of a rectangular region. */
@@ -224,8 +245,37 @@ export function decide(m) {
   const notes = [];
   const push = (s) => notes.push(s);
 
-  // --- 1. clean: essentially no difference anywhere -------------------------
-  if (geoEnergy < 1.2 && relChanged < 0.02 && Math.abs(relText) < 0.05) {
+  // --- 1. structural confinement: an exclusive signature, checked FIRST -------
+  //
+  //   A difference confined entirely to one vertical third, with all other thirds empty,
+  //   is produced by exactly one thing: a rigid block being translated. Nothing else in
+  //   this task concentrates its energy that way — re-rasterised glyphs straddle two thirds,
+  //   and a repaint covers the canvas.
+  //
+  //   Measured at scale 4 across every class and magnitude:
+  //     spacing    fracBot 0.927, fracMid 0.073, fracTop 0.000   (at EVERY magnitude,
+  //                                                              including mag 0.02 where
+  //                                                              geoEnergy is only 0.78)
+  //     geometry   fracMid 1.000, others 0.000
+  //     typography fracTop 0.56..0.70 with fracMid 0.30..0.44    (two thirds -> excluded)
+  //     color      fracMid 1.000   (decided by the hue rule below)
+  //     imagery    fracMid 1.000   (decided by the saturation rule below)
+  //     identical  all thirds 0.000
+  //
+  //   This has to run before the `clean` gate. The previous ordering let low-magnitude
+  //   spacing be swallowed by `clean`, because a 1-2px displacement gives geoEnergy ~2.5
+  //   and changedRows ~50, i.e. relChanged 0.017..0.019, just under clean's 0.02 bar —
+  //   while fracBot sat at 0.927 the whole time, unread. That single ordering bug caused
+  //   100% of the spacing failures (9/48 in the 12-seed sweep).
+  //
+  //   Requiring geoEnergy > 0.5 keeps this from firing on byte-identical images, where
+  //   every third is 0.000 and the max would otherwise be ambiguous.
+  const thirdMax = Math.max(fracTop, fracMid, fracBot);
+  const thirdOthers = [fracTop, fracMid, fracBot].filter(v => v !== thirdMax);
+  const confined = geoEnergy > 0.5 && thirdMax > 0.9 && Math.max(...thirdOthers) < 0.1;
+
+  // --- 2. clean: essentially no difference anywhere -------------------------
+  if (!confined && geoEnergy < 1.2 && relChanged < 0.02 && Math.abs(relText) < 0.05) {
     return { label: 'clean', confidence: 0.95, reason: `near-identical (geoEnergy=${geoEnergy.toFixed(2)}, changedRows=${changedRows})`, features: m };
   }
 
@@ -250,42 +300,51 @@ export function decide(m) {
   // A layout blit also drains a little saturation (areas shift onto differently coloured
   // neighbours), so saturation loss alone is not sufficient. What separates a genuine
   // wash-out is that the luminance gain is large RELATIVE to the structural displacement:
-  // over mag 0.06..1.0 imagery gives dLum/geoEnergy of 0.98..1.38 with dHue == 0, while
-  // geometry gives 0.23..0.78 (its energy is spent moving pixels, not brightening them).
+  // measured over mag 0.02..1.0 imagery gives dLum/geoEnergy of 0.98..1.38, while geometry
+  // gives 0.23..0.78 (its energy is spent moving pixels, not brightening them).
+  //
+  // Saturation loss is the axis that separates imagery from color, and it is read as a
+  // RATIO of the original saturation so it survives palette changes.
+  //
+  // Measured at scale 4, imagery drains saturation monotonically and the two classes are
+  // separated on TWO scale-invariant ratios, not on absolute magnitudes:
+  //
+  //   imagery   satDrained 0.017->0.952,  washOut (dLum/geoEnergy) pinned at 0.98..1.06
+  //   geometry  satDrained 0.004->0.304,  washOut 0.66..0.83
+  //   color     satDrained -0.008->0.020, washOut negative (it gets darker, not lighter)
+  //   spacing   satDrained 0.000,         washOut 0.00
+  //
+  // A displaced panel does drain some saturation (it slides onto differently coloured
+  // neighbours), so `satDrained` alone is not sufficient — geometry reaches 0.304. What
+  // separates a genuine wash-out is that essentially ALL of its structural energy went into
+  // brightening (washOut ~0.98), whereas a displacement spends its energy moving and only
+  // incidentally brightens (washOut <= 0.83). The 0.9 bar sits in that measured gap.
+  //
+  // An earlier version also capped `dHue < 2` for imagery. That overfitted the LOW end:
+  // imagery's incidental hue drift grows with severity (0.28deg at mag 0.015 to 34.8deg at
+  // mag 1.0), so the cap silently rejected every high-severity imagery case AND let a
+  // high-severity geometry case be read as imagery. Neither ratio needs a hue companion.
   const washOut = geoEnergy > 0 ? dLum / geoEnergy : 0;
-  if (satDrained > 0.06 && dLum > 1.5 && washOut > 0.9 && dHue === 0) {
-    push(`hero washed out: saturation -${(satDrained * 100).toFixed(0)}%, luminance +${dLum.toFixed(1)} at ${washOut.toFixed(2)}x structural energy, hue unchanged -> artwork lost`);
+  if (satDrained > 0.012 && dLum > 0.8 && washOut > 0.9) {
+    push(`hero washed out: saturation -${(satDrained * 100).toFixed(1)}%, luminance +${dLum.toFixed(1)} at ${washOut.toFixed(2)}x structural energy -> artwork lost`);
     return { label: 'imagery', confidence: 0.85, reason: notes.join('; '), features: m };
   }
-  if (dHue >= 0 && dHue > 6 && Math.abs(dSat) < 0.02 && dHero > 5) {
-    push(`hue rotated ${dHue.toFixed(0)}deg at constant saturation (dSat=${dSat.toFixed(3)}, dHero=${dHero.toFixed(1)}) -> wrong palette`);
+  if (dHue >= 0 && dHue > 1.5 && satDrained <= 0.012 && dHero > 1.5) {
+    push(`hue rotated ${dHue.toFixed(2)}deg with saturation untouched (satDrained=${(satDrained * 100).toFixed(2)}%, dHero=${dHero.toFixed(1)}) -> wrong palette`);
     return { label: 'color', confidence: 0.82, reason: notes.join('; '), features: m };
   }
 
-  // --- 3b. decisive structural override ---------------------------------------
-  //     Before the text-mass test, check whether the difference is spatially confined to
-  //     a single vertical third. Re-rasterised glyphs change edges wherever text lives,
-  //     which straddles the header, the stat row and the hero — it cannot concentrate in
-  //     one third. A displaced panel is one rigid block, so its energy sits in exactly
-  //     one third (measured: geometry fracMid = 1.000 with fracTop = fracBot = 0.000).
+  // --- 3b. structural confinement resolution ----------------------------------
+  //     `confined` was computed at the top (it gates the `clean` branch). Everything above
+  //     this point has already had the chance to claim `color`/`imagery` on their orthogonal
+  //     axes — which matters, because a repaint also puts its energy in one third
+  //     (fracMid = 1.000) and would otherwise be read as `geometry` here.
   //
-  //     This override exists because supersampled rendering gives antialiased text edges
-  //     a slightly different gradient count under pure translation, so |relText| is no
-  //     longer exactly 0 and the ink-loss test below would misread a moved panel as a
-  //     re-rastered one. Spatial confinement is the more reliable signal at that point.
-  //
-  //     "Confined to one third" means one third holds ~everything AND the others hold
-  //     ~nothing. Measured over mag 0.06..1.0: geometry gives (top,mid,bot) =
-  //     (0.000, 1.000, 0.000) at every magnitude, while spacing gives (0.000, 0.073,
-  //     0.927). Typography is the case that must NOT match: it gives top 0.556..0.701
-  //     with mid 0.299..0.444, i.e. energy split across two thirds, because glyphs
-  //     change in the header band AND the stat row AND the hero. Requiring the other
-  //     thirds to be near-empty is what keeps typography out of this branch.
-  const third = Math.max(fracTop, fracMid, fracBot);
-  const others = [fracTop, fracMid, fracBot].filter(v => v !== third);
-  if (relChanged > 0.02 && third > 0.9 && Math.max(...others) < 0.1) {
-    const label = fracBot === third ? 'spacing' : 'geometry';
-    push(`difference confined to one third (top=${fracTop.toFixed(3)}, mid=${fracMid.toFixed(3)}, bot=${fracBot.toFixed(3)}) -> single rigid block displacement, not glyph re-rasterisation`);
+  //     So if we reach this line and the difference is confined to one third, it is a rigid
+  //     block displacement: `spacing` when the energy is in the bottom third, else `geometry`.
+  if (confined) {
+    const label = fracBot === thirdMax ? 'spacing' : 'geometry';
+    push(`difference confined to one third (top=${fracTop.toFixed(3)}, mid=${fracMid.toFixed(3)}, bot=${fracBot.toFixed(3)}) -> single rigid block displacement, not a repaint or glyph re-rasterisation`);
     return { label, confidence: 0.8, reason: notes.join('; '), features: m };
   }
 

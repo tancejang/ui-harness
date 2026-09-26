@@ -1,0 +1,7 @@
+{
+  "_comment": "Held-out eval difficulty band for the UI defect benchmark, as [min, max] defect magnitude. Read by run.mjs, seed-sweep.mjs and difficulty.mjs so they cannot drift apart. Re-derive with `node bench/difficulty.mjs` whenever this band becomes saturated (sweep mean 1.0000 with 0 per-class failures) — a saturated band cannot drive improvement. History: [0.06,0.11] was the first band; it was solved to 30/30 perfect seeds (720 cases, 0 failures), so the band moved to [0.03,0.06], where typography measurably breaks.",
+  "band": [0.03, 0.06],
+  "trainBand": [0.75, 1.0],
+  "casesPerClass": 4,
+  "sweepSeeds": 12
+}
