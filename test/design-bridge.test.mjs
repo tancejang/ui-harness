@@ -83,6 +83,70 @@ test('every reviewable rule is citable and has a measure function', () => {
 });
 
 /**
+ * Coverage of the skill by measurements.
+ *
+ * The skill teaches many rules; only some can be judged from a rendered screen. This asserts that
+ * every rule in the skill is EITHER measured OR explicitly listed as prompt-only, so a rule cannot
+ * silently fall into the gap between "the model was told" and "we actually check".
+ */
+test('every rule in the skill is either measured or documented as prompt-only', async () => {
+  const skill = await fs.readFile(new URL('../skills/visual-quality/SKILL.md', import.meta.url), 'utf8');
+  const inSkill = [...new Set([...skill.matchAll(/\*\*([A-Z]{2}-\d+)/g)].map(m => m[1]))];
+  assert.ok(inSkill.length >= 20, `expected the skill to carry many rules, found ${inSkill.length}`);
+
+  const { REVIEW_RULES: rules, PROMPT_ONLY_RULES } = await import('../bench/review-knowledge.mjs');
+  const measured = new Set(rules.map(r => r.id));
+  const documented = new Set(Object.keys(PROMPT_ONLY_RULES));
+
+  const unaccounted = inSkill.filter(id => !measured.has(id) && !documented.has(id));
+  assert.deepEqual(unaccounted, [],
+    `these rules are taught but neither measured nor documented as prompt-only: ${unaccounted.join(', ')}`);
+
+  // And no prompt-only entry may claim to be measured.
+  for (const id of documented) {
+    assert.ok(!measured.has(id), `${id} is listed prompt-only but also has a measurement`);
+  }
+  console.log(`    ${inSkill.length} rules in the skill: ${measured.size} measured, ${documented.size} prompt-only`);
+});
+
+/**
+ * REGRESSION: HI-3 must not flag white text on a coloured ground.
+ *
+ * A first version flagged any text with saturation under 10%, which flagged the fixture's white
+ * text 347 times. White on colour is usually the CORRECT choice, so that was a nonsense finding.
+ * The rule is about mid-tone neutral grey only.
+ */
+test('REGRESSION: HI-3 does not flag white text on a coloured ground', async () => {
+  const { noGreyTextOnColour } = await import('../bench/design-rules-extended.mjs');
+  const png = await renderSpec(cleanSpec(), { scale: RENDER_SCALE });
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'uih-hi3-'));
+  const file = path.join(dir, 'c.png');
+  await fs.writeFile(file, png);
+  const r = await noGreyTextOnColour(file);
+  assert.ok(r === null || r.ok, `HI-3 flagged the fixture: ${JSON.stringify(r)}`);
+  if (r) assert.match(r.note, /white text on colour is correct/);
+});
+
+/**
+ * REGRESSION: CO-4 must judge plateau colours, not antialiased blends.
+ *
+ * A first version sampled every pixel and concluded the fixture's green ramp collapsed to 34%
+ * saturation. The "light greens" it found were blends of the accent against the white page — there
+ * is no light-green palette colour on that screen at all. Blends are excluded now, so the fixture
+ * has no judgeable ramp and the rule reports unverified rather than inventing a failure.
+ */
+test('REGRESSION: CO-4 excludes antialiased blends and reports unverified when there is no ramp', async () => {
+  const { saturationSurvivesLightness } = await import('../bench/design-rules-extended.mjs');
+  const png = await renderSpec(cleanSpec(), { scale: RENDER_SCALE });
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'uih-co4-'));
+  const file = path.join(dir, 'c.png');
+  await fs.writeFile(file, png);
+  const r = await saturationSurvivesLightness(file);
+  // Either no judgeable ramp (null) or a passing one. Never a fabricated failure.
+  assert.ok(r === null || r.ok, `CO-4 reported a failure from blends: ${JSON.stringify(r?.worst)}`);
+});
+
+/**
  * THE GAP THIS FILE EXISTS TO PREVENT.
  *
  * The rules were previously unreachable from a live run: `bench/` and `src/` had no connection at

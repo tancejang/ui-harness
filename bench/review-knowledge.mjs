@@ -20,6 +20,10 @@ import {
   lightnessKeepsSaturation, greysHaveTemperature, textContrast, greyRampCount,
   greyTemperature, radiusCluster, contrastRatio, hexToHsl,
 } from './design-rules.mjs';
+import {
+  typeScaleCount, lineHeightScaling, hierarchyContrast,
+  saturationSurvivesLightness, lightFromAbove, borderCount, noGreyTextOnColour,
+} from './design-rules-extended.mjs';
 
 /**
  * The reviewable rule set. Each entry is what a review finding cites.
@@ -164,7 +168,193 @@ export const REVIEW_RULES = [
       }));
     },
   },
+
+  // -------------------------------------------------------------------------
+  // Rules that were previously prompt-only. The skill taught 29 rules but only 7 had a
+  // measurement, so 22 reached the model as advice with no evidence. Each entry below is a rule
+  // where the rendered image genuinely contains the answer, so a measurement is possible — and
+  // where it is NOT possible the measure returns null so the rule is reported unverified rather
+  // than invented. Rules that cannot be seen in pixels at all (TY-2 on `em` units, TY-3 on font
+  // choice) deliberately stay prompt-only and are listed in PROMPT_ONLY_RULES.
+  // -------------------------------------------------------------------------
+  {
+    id: 'TY-1',
+    page: 101,
+    statement: 'Establish a type scale; avoid arbitrary one-off sizes.',
+    source: 'prose',
+    measure: ({ png, scale }) => {
+      if (!png) return null;
+      return typeScaleCount(png, { scale }).then(r => {
+        if (!r) return null;
+        return {
+          ok: r.ok,
+          detail: `${r.distinctHeights} distinct text heights across ${r.bandCount} text bands`,
+          evidence: r.heights.slice(0, 10).map(h => `${h}px`),
+          suggestion: r.ok ? null : 'consolidate to a smaller set of sizes',
+        };
+      });
+    },
+  },
+  {
+    id: 'TY-6',
+    page: 121,
+    statement: 'Line-height is proportional: looser for long lines, tighter for large text.',
+    source: 'prose',
+    measure: ({ png, scale }) => {
+      if (!png) return null;
+      return lineHeightScaling(png, { scale }).then(r => {
+        if (!r) return null;
+        return {
+          ok: r.ok,
+          detail: `larger text uses ${r.larger.ratio}x line-height vs ${r.smaller.ratio}x for smaller (glyph ${r.larger.glyph}px vs ${r.smaller.glyph}px)`,
+          evidence: r.blocks.map(b => `glyph ${b.glyph}px pitch ${b.pitch}px ratio ${b.ratio}`),
+          suggestion: r.ok ? null : 'tighten line-height on larger text; it should not be looser than body copy',
+        };
+      });
+    },
+  },
+  {
+    id: 'HI-1',
+    page: 35,
+    statement: 'Not all elements are equal; establish a deliberate hierarchy.',
+    source: 'prose',
+    measure: ({ png, scale }) => {
+      if (!png) return null;
+      return hierarchyContrast(png, { scale }).then(r => {
+        if (!r) return null;
+        return {
+          ok: r.ok,
+          detail: `largest : smallest text = ${r.sizeRatio}x by height, ${r.weightRatio}x by stroke weight, colour delta ${r.colourDelta} — ${r.channelsDiffering} of 3 channels differ`,
+          evidence: [
+            `top ${r.top.height}px relStroke ${r.top.relStroke}`,
+            `bottom ${r.bottom.height}px relStroke ${r.bottom.relStroke}`,
+            `sizeRatio ${r.sizeRatio} weightRatio ${r.weightRatio} colourDelta ${r.colourDelta}`,
+          ],
+          suggestion: r.ok ? null : 'hierarchy needs either a larger size step (>=1.25x) or a second differing channel such as weight',
+        };
+      });
+    },
+  },
+  {
+    id: 'HI-2',
+    page: 37,
+    statement: "Size isn't everything — vary weight and colour too, not just scale.",
+    source: 'prose',
+    measure: ({ png, scale }) => {
+      if (!png) return null;
+      // Uses the same measurement as HI-1 but asserts the stricter form of HI-2: strictly MORE
+      // than one channel must differ, because relying on size alone is the failure the book names.
+      return hierarchyContrast(png, { scale }).then(r => {
+        if (!r) return null;
+        return {
+          ok: r.channelsDiffering >= 2,
+          detail: `${r.channelsDiffering} of 3 channels differ between the strongest and weakest text (size ${r.sizeRatio}x, stroke weight ${r.weightRatio}x, colour delta ${r.colourDelta})`,
+          evidence: [`sizeRatio ${r.sizeRatio}`, `weightRatio ${r.weightRatio}`, `colourDelta ${r.colourDelta}`],
+          suggestion: r.channelsDiffering >= 2 ? null : 'size alone is carrying the hierarchy; add a weight or colour difference',
+        };
+      });
+    },
+  },
+  {
+    id: 'CO-4',
+    page: 151,
+    statement: "Don't let lightness kill your saturation: brightening must not desaturate into pastel.",
+    source: 'figure',
+    measure: ({ png }) => {
+      if (!png) return null;
+      return saturationSurvivesLightness(png).then(r => {
+        if (!r) return null;
+        const w = r.worst;
+        return {
+          ok: r.ok,
+          detail: `hue ${w.hue}deg ramp keeps ${(w.retained * 100).toFixed(0)}% of its saturation as it lightens (S ${w.dark.s}% at L ${w.dark.l}% -> S ${w.light.s}% at L ${w.light.l}%)`,
+          evidence: r.families.map(f => `hue ${f.hue}: retained ${(f.retained * 100).toFixed(0)}%`),
+          suggestion: r.ok ? null : 'hold saturation while changing lightness; the book\'s own ramp keeps 129%',
+        };
+      });
+    },
+  },
+  {
+    id: 'DE-1',
+    page: 171,
+    statement: 'Emulate a single light source; light comes from above.',
+    source: 'prose',
+    measure: ({ png, scale }) => {
+      if (!png) return null;
+      return lightFromAbove(png, { scale }).then(r => {
+        if (!r) return null;
+        return {
+          ok: r.ok,
+          detail: r.detail,
+          evidence: r.ok ? [] : [`${r.lighterOnTop} lighter on top`, `${r.lighterOnBottom} lighter on bottom`],
+          suggestion: r.ok ? null : 'pick one light direction and apply it to every raised element',
+        };
+      });
+    },
+  },
+  {
+    id: 'FI-5',
+    page: 237,
+    statement: 'Use fewer borders: prefer a shadow, two background colours, or extra spacing.',
+    source: 'prose',
+    measure: ({ png, scale }) => {
+      if (!png) return null;
+      return borderCount(png, { scale }).then(r => {
+        if (!r) return null;
+        return {
+          ok: r.ok,
+          detail: `${r.borderRows} full-width separator rows (${r.per1000LogicalPx} per 1000 logical px)`,
+          evidence: [`border rows ${r.borderRows}`],
+          suggestion: r.ok ? null : 'replace some separators with spacing, a background shift, or a shadow',
+        };
+      });
+    },
+  },
+  {
+    id: 'HI-3',
+    page: 41,
+    statement: 'Do not use grey text on coloured backgrounds.',
+    source: 'prose',
+    measure: ({ png }) => {
+      if (!png) return null;
+      return noGreyTextOnColour(png).then(r => {
+        if (!r) return null;
+        return {
+          ok: r.ok,
+          detail: r.violations ? `${r.violations} neutral-grey text pixels on a coloured ground` : r.note,
+          evidence: [],
+          suggestion: r.ok ? null : 'tint the text toward the background hue instead of using neutral grey',
+        };
+      });
+    },
+  },
 ];
+
+/**
+ * Rules the skill teaches that CANNOT be judged from a rendered screen.
+ *
+ * Listed explicitly so the gap is documented rather than mistaken for an oversight. These stay
+ * prompt-only: the reviewer is told them, and no measurement is fabricated for them.
+ */
+export const PROMPT_ONLY_RULES = {
+  'TY-2': 'em units live in source, not pixels',
+  'TY-3': 'font choice and weight availability are source facts',
+  'TY-4': 'line length needs the text content, which a screenshot does not reliably give',
+  'TY-5': 'baseline alignment is ambiguous to recover from a raster without glyph metrics',
+  'TY-8': 'centred-text line count needs the text spans, not just their pixels',
+  'TY-9': 'numeric alignment needs to know which values are numbers',
+  'TY-10': 'letter-spacing needs a reference metric for the same font',
+  'SP-4': 'padding-vs-container proportionality needs to know which box is the container',
+  'SP-6': 'content max-width needs the viewport, which the capture already encodes',
+  'HI-4': 'de-emphasis is a compositional judgement',
+  'HI-5': 'whether a label is needed is a content judgement',
+  'CO-7': 'colour-plus-shape redundancy needs to know the semantic meaning',
+  'DE-3': 'shadow layer count is not reliably separable in a raster',
+  'IM-2': 'text-over-image contrast is measurable only when text sits on imagery',
+  'IM-3': 'intended asset size is a source fact',
+  'FI-4': 'empty states are scenarios, not a property of one capture',
+  'SP-3': 'scale non-linearity is implied by SP-2 conformance',
+};
 
 /**
  * Run every reviewable rule against a rendered screen.
