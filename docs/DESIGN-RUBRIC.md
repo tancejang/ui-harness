@@ -1,7 +1,21 @@
 # Mobile / product UI design rubric — grounded in *Refactoring UI*
 
 Source: *Refactoring UI* by Adam Wathan & Steve Schoger (252pp). Extracted text lives at
-`.uih/agent/pdf/text.txt`; the 153-entry outline is at `.uih/agent/pdf/outline.json`.
+`.uih/agent/pdf/text.txt`; the 153-entry outline is at `docs/reference/refactoring-ui-outline.json`.
+
+**Both the prose and the figures are used.** The prose states rules of thumb; the **284 figures**
+state the values. See [`docs/reference/README.md`](reference/README.md) for what the figures
+added, and `bench/review-knowledge.mjs` for the executable form of the `[MEASURABLE]` rules.
+
+| source | what it gives | example |
+|---|---|---|
+| prose | the rule | "no two values closer than ~25%" (p.71) |
+| **figures** | **the values** | the scale itself: `4 8 12 16 24 32 48 64 96 128 192 256 384 512 640 768` (p.73) |
+| prose | the rule | "you need 5-10 shades" (p.150) |
+| **figures** | **the values** | the blue ramp, where saturation *rises* 55.7% → 87.5% as lightness goes 27.5% → 96.9% |
+
+Both levels matter. A reviewer with only the prose can say "your spacing looks inconsistent";
+with the figures it can say "28px is not on the scale — the nearest steps are 24 and 32".
 
 This file exists so that critic verdicts cite **specific, sourced design rules** instead of
 ad-hoc taste. Every rule has an ID, a source page, and — where the benchmark can measure it —
@@ -12,6 +26,15 @@ How to use this in a critique:
 - Cite the rule ID and page, e.g. "violates SP-4 (p.95): spacing does not scale proportionally".
 - Prefer `[MEASURABLE]` rules when a pixel verdict is available; they are falsifiable.
 - If a finding maps to no rule here, say so explicitly and mark it as unsourced judgement.
+
+## Rules now backed by measured values rather than description
+
+| ID | was | now |
+|---|---|---|
+| SP-2 | "no two values closer than ~25%" | gaps must land **on** the book's scale, queryable via `snapToSpacingScale(px)` |
+| CO-4 | "don't let lightness kill saturation" | the light end must keep ≥60% of the dark end's saturation; the book's own blue ramp keeps 129% |
+| CO-5 | "greys don't have to be grey" | greys must share a hue within 20° and hold ≥5% saturation; the book's grey ramp sits at 213° ± 2.9° |
+| CO-6 | "accessible doesn't have to mean ugly" | measured on **plateau** edges, not antialiased ones — see the note in `bench/design-rules.mjs` |
 
 ---
 

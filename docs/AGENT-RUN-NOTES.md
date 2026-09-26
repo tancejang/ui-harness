@@ -351,10 +351,66 @@ So it is a limitation of the defect **model**, not a coding bug, and it cannot b
 a threshold without breaking the saturated cases. Documented as such. `verify-palette.mjs`'s
 21/200 misses are the same degenerate cases, not independent failures.
 
+## Cycle 8 — grounding reviews in the book's figures (`8edbbec`)
+
+The user supplied *Refactoring UI* and asked that UIH review **from that knowledge rather than
+randomly**. The prose had been extracted earlier, but that only gives rules of thumb. The
+**284 figures across 191 of 252 pages** carry the actual values, and none had been extracted.
+
+**PDF-Extract-Kit was considered and rejected**, with the reason recorded: it needs PyTorch plus
+several large models (~5–10GB) against 5.5GB free, and targets layout/table/formula recovery
+this book does not need. `pypdf` already returns full-resolution figures, so no heavy dependency
+was added. All 284 extracted.
+
+### What the figures added (and why the prose was insufficient)
+| rule | prose says | figures give |
+|---|---|---|
+| SP-2 (p.73) | "no two values closer than ~25%" | the scale: `4 8 12 16 24 32 48 64 96 128 192 256 384 512 640 768` |
+| CO-4 (pp.151–153) | "don't let lightness kill saturation" | the blue ramp: S rises 55.7% → 87.5% as L rises 27.5% → 96.9% |
+| CO-5 (pp.157–159) | "greys don't have to be grey" | the grey ramp holds hue ~207–215°, never neutral |
+
+Three rules became **falsifiable** for the first time. Each is tested both against the book's own
+values (a rule that rejects Refactoring UI's own ramps is wrong) and against a synthetic
+counterexample (so the rule is not vacuous).
+
+### What the rules caught in the fixture — UIH actually improved
+1. **SP-2**: two `28px` gaps, which are not on the scale → fixed to `32`.
+2. **Trailing margin was 38px**, also off-scale → fixed to `32` by closing the page on a scale
+   value at both ends.
+3. **CO-6**: white-on-accent `3.77:1`, muted-on-panel `4.39:1`, both under the required `4.5`
+   → replaced with `#047857` (5.48:1, hue 163 vs 161) and `#5f6875` (5.12:1, hue 215 vs 220).
+   Darkened, **not desaturated** — which is precisely what the rule means.
+
+Fixing 1 and 2 pushed the last list row 4px off the canvas; the existing unit test caught it, and
+the layout was re-tightened to a `48px` row pitch rather than shaving a value off the scale.
+
+### A measurement bug the figures exposed
+`textContrast` sampled every high-gradient pixel and took p05 — which measures **antialiasing**,
+not legibility. The blend colours between glyph and background necessarily sit near 2:1 against
+both sides, so the rule failed on screens whose every declared colour pair passed. It now takes
+the two **plateau** colours meeting at each edge and requires the neighbourhood to be bimodal.
+`p05` went **2.55 → 5.12**, and the reported worst pairs now match hand-computed values exactly.
+
+### Wiring
+`bench/review-knowledge.mjs` exposes `reviewScreen()`, which runs 7 reviewable rules and returns
+findings that each cite a **rule id and page number**, with measured evidence and a suggested fix.
+Rules that cannot be judged from one render are reported **unverified, never as passing**.
+`bench/review-demo.mjs` demonstrates it on the fixture, on a screen with off-scale spacing, and on
+one with a pure-neutral grey ramp — each yielding specific, sourceable findings.
+
+**The fixture now passes all 7 reviewable rules.** 120 tests pass; all five controls pass.
+
+### Still open
+The remaining ~250 figures are extracted and available but not yet interpreted. Each one that
+backs a `[MEASURABLE]` rule can be turned into another falsifiable check — the shadow recipe
+(pp.185–187) and the elevation system (pp.181–182) are the obvious next candidates.
+
+---
+
 ## Consolidated state
 
-- **14 commits pushed to `main`**; local HEAD == `origin/main` at every checkpoint.
-- 7 recorded cycles in `.uih/agent/`, each with before/after scores and a critic verdict, rendered
+- **15 commits pushed to `main`**; local HEAD == `origin/main` at every checkpoint.
+- 8 recorded cycles in `.uih/agent/`, each with before/after scores and a critic verdict, rendered
   into `.uih/agent/progress.html`.
 - `npm test`: **120 passing** (was 95 at the start).
 - Every score line carries all five required values; baseline sanity is asserted, not assumed.
