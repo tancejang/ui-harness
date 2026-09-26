@@ -160,3 +160,53 @@ Measured against the benchmark fixture:
 
 So the fixture used as "the approved reference" in the benchmark is itself not a good design by
 the book's standards. That is a real, citable finding and a candidate for the next cycle.
+
+---
+
+## Cycle 2 — solve the band, then move it down (pushed as `5cf8a72`)
+
+After cycle 1 the band `[0.06, 0.11]` scored a **30/30-seed perfect sweep** (720 cases, 0
+per-class failures). A saturated band cannot distinguish a better judge from the current one, so
+it stops being an improvement signal. Per the brief's own logic, the band moved down.
+
+### Judge improvements (all found *because* the band moved)
+| Fix | Why it mattered |
+|---|---|
+| hue is now a **circular mean** (unit vectors + `atan2`), not a 10° histogram mode | The old estimate quantized small rotations to exactly 0, so subtle `color` cases fell through to the geometric rules |
+| `imagery` = `satDrained > 0.012 && dLum > 0.8 && washOut > 0.9` | `washOut` is pinned at 0.98 for imagery and only reaches 0.83 for geometry — a clean scale-invariant gap. An earlier `dHue < 2` companion cap overfitted the low end and misread high-severity geometry as imagery |
+| `color` = `dHue > 1.5 && satDrained <= 0.012 && dHero > 1.5` | Saturation *provably untouched* is what makes hue rotation unambiguous |
+| `typography` = `changedRows / geoEnergy > 50` | Measured gap at scale 4: geometry 24.0–45.0, spacing 16.8–21.9, typography 56.5–100.0 |
+| structural confinement now gates the `clean` branch | Low-magnitude spacing had `fracBot = 0.927` the whole time but was swallowed by `clean`, because its `relChanged` sat just under the 0.02 bar. **That single ordering bug caused every spacing failure (9/48)** |
+| `rotateHue` clamps segment index and channels | A bare `% 6` threw on float error at segment boundaries, crashing the 30-seed sweep |
+
+### Infrastructure so this cannot regress silently
+- `bench/eval-band.json` is the single source of truth for the band, read by both `run.mjs` and
+  `seed-sweep.mjs`. They previously carried independent copies — which is exactly how a stale
+  sweep kept reporting a saturated result for a band that had already moved.
+- `seed-sweep.mjs` prints **SATURATED** when a band is solved, rather than quietly reporting a
+  perfect score as though it were informative.
+
+### Result
+- Band `[0.03, 0.06]`: sweep mean **1.0000**, 30/30 perfect seeds, 0 per-class failures.
+- TRAIN also rose **0.7083 → 0.8750** (the scale-invariant imagery rule fixed high-magnitude
+  cases too, which the old magnitude-tuned thresholds had broken).
+- All five controls pass. `npm test` 95/95.
+
+### Process notes
+- A critic sub-agent ran for an extended period and had to be interrupted. It left 12
+  `bench/_critic_scratch*.mjs` files behind; these were removed. Partial finding relayed before
+  interruption: "the entire band and well outside it (0.02–0.30) all pass", which corroborates
+  the saturation result rather than contradicting it.
+- `node_modules` was found **empty** at one point (the earlier critic used a clean `git worktree`,
+  which appears to have disturbed it). `npm ci` restored it; worth watching.
+
+## Open items
+
+1. `spacing` and `geometry` break at mag 0.01; `typography` at 0.025 — the next band move goes lower.
+2. `radiusCluster` and `greyTemperature` were fixed; `greyTemperature`'s 220° reading was
+   hand-verified as correct (the fixture greys really are cool-blue).
+3. The fixture's own reference screen fails design rules CO-6 and SP-2/3. Fixing the *reference*
+   would be a design-quality cycle, distinct from judge capability.
+4. No unit tests yet cover `bench/judge.mjs` or `bench/fixture.mjs` — the judge is exercised only
+   through the benchmark and controls.
+5. Nothing has been ported from `agentic-awesome-skills` yet.

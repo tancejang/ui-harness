@@ -52,6 +52,25 @@ async function cycles() {
   } catch { return []; }
 }
 
+async function readBand() {
+  try {
+    return JSON.parse(await fs.readFile(path.join(ROOT, 'bench', 'eval-band.json'), 'utf8'));
+  } catch { return null; }
+}
+
+/**
+ * The band is saturated when the latest evaluation scored 1.0000 with the unit suite clean.
+ * A saturated band is retained as a regression gate but can no longer drive improvement, so
+ * the page says so instead of displaying a perfect score as though it were informative.
+ */
+async function bandIsSaturated(latest) {
+  if (!latest) return false;
+  if (latest.bench.score < 1) return false;
+  const cyc = await cycles();
+  const lastSweep = cyc.filter(c => c.after === 1).length > 0;
+  return lastSweep;
+}
+
 function fmtDist(d) {
   if (!d) return '—';
   return Object.entries(d).map(([k, v]) => `${k}:${v}`).join(', ');
@@ -67,6 +86,8 @@ async function main() {
   const log = await gitLog();
   const history = await readJsonDir(EVAL_DIR);
   const cyc = await cycles();
+  const band = await readBand();
+  const saturated = await bandIsSaturated(history[history.length - 1]);
 
   const first = history[0];
   const last = history[history.length - 1];
@@ -160,9 +181,11 @@ code{background:#0a1024;padding:1px 6px;border-radius:4px;font-size:12px;color:v
   <div class="card"><div class="k">Cycles accepted</div><div class="v">${accepted}<span style="font-size:14px;color:var(--dim)"> / ${cyc.length}</span></div></div>
   <div class="card"><div class="k">Unit tests</div><div class="v">${last ? `${last.unit.passed}/${last.unit.total}` : '—'}</div></div>
   <div class="card"><div class="k">Feature commits</div><div class="v">${featCommits.length}</div></div>
+  <div class="card"><div class="k">Eval band</div><div class="v" style="font-size:15px">${band ? `[${band.band[0]}, ${band.band[1]}]` : '—'}</div></div>
   <div class="card"><div class="k">Head</div><div class="v" style="font-size:15px"><code>${log[0] ? log[0].short : '—'}</code></div></div>
 </div>
 
+${saturated ? `<div class="note"><b>BAND SATURATED:</b> the eval band scores 1.0000 with no per-class failures, so it can no longer distinguish a better judge from the current one. It is retained as a regression gate only. The next cycle must move the band down with <code>bench/difficulty.mjs</code> before any score from it means anything.</div>` : ''}
 ${last && last.bench.score <= last.bench.const ? `<div class="note"><b>FAILED ROUND:</b> the benchmark does not beat the constant predictor. This round is spent diagnosing a degenerate metric, not improving the model.</div>` : ''}
 ${last && last.unit.degenerate ? `<div class="note"><b>Note on the unit suite:</b> <code>npm test</code> is 95/95 deterministic, so a constant predictor scores 1.0000 on it. It is reported as DEGENERATE and used only as a regression gate. The benchmark is the improvement signal.</div>` : ''}
 
