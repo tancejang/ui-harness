@@ -149,16 +149,21 @@ These are the findings a critic raised that are **not** yet fixed, plus the stru
 the approach. They are listed so nobody mistakes a passing score for more than it is.
 
 ### Adversarial cases the judge gets wrong (found by a critic, still open)
-- If the hero panel **starts pale** (`#f8fafc`), the wash-out is a no-op and `imagery` is
-  undetectable at every magnitude. Reachable in-band.
+- **Pale hero panels defeat `imagery` entirely.** `verify-imagery-pale.mjs` bounds this precisely:
+  across 6 panel colours × 5 severities, imagery is detected in 15/30 combinations, and
+  **every single miss is on a near-neutral panel** (saturation 0.011–0.033); there are zero
+  misses on a saturated panel. For a panel already at the overlay colour, `dSat` is exactly
+  `-0.000` — the wash-out is a mathematical no-op, so *no* saturation-based algorithm could
+  detect it. This is a limitation of the defect **model**, not a coding bug, and it is not fixed
+  by moving a threshold (which would break the saturated cases).
 - Washing out the **stat cards** instead of the hero reads as `clean`.
 - A hero rendered as a **gradient** (realistic artwork) is ambiguous; it falls to a fallback.
 - **Combined defects** (geometry + color, geometry + typography) collapse to a single class. The
   task declares exactly one class per case, so multi-defect screens are unhandled by design —
   but real screens have them.
-- A **grey or near-white hero** makes saturation-based detection impossible in principle.
-  `verify-palette.mjs` measures this: 177/200 across eight accent colours, with the residue
-  concentrated exactly in the degenerate grey cases.
+- `verify-palette.mjs` measures 179/200 across eight accent colours; the 21 misses are the same
+  degenerate grey/near-white cases described above, not independent failures.
+
 
 ### Structural limits
 - The fixture is synthetic SVG geometry, not real application screenshots. It exercises the
