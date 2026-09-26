@@ -9,12 +9,24 @@
 
 import sharp from 'sharp';
 
+/**
+ * The fixture palette.
+ *
+ * `accent` and `muted` are deliberately one step darker than the obvious Tailwind picks
+ * (#059669 / #6b7280). The grounded design review flagged CO-6 on this screen — Refactoring UI
+ * p.163 requires 4.5:1 for body text — and measurement showed white-on-accent at 3.77:1 and
+ * muted-on-panel at 4.39:1, both failing. The replacements keep the hue (accent 163deg vs 161,
+ * muted 215deg vs 220) and clear the bar at 5.48:1 and 5.12:1, which is what the book means by
+ * "accessible doesn't have to mean ugly": darken the colour, do not desaturate it into grey.
+ *
+ * Verified by bench/find-accessible-palette.mjs and asserted in bench/design-rules-figures.mjs.
+ */
 export const PALETTE = {
   bg: '#ffffff',
   ink: '#111827',
-  muted: '#6b7280',
+  muted: '#5f6875',    // was #6b7280 — 4.39:1, failed CO-6
   primary: '#2563eb',
-  accent: '#059669',
+  accent: '#047857',   // was #059669 — 3.77:1, failed CO-6
   warn: '#d97706',
   danger: '#dc2626',
   panel: '#f3f4f6',
@@ -67,19 +79,36 @@ export function cleanSpec(W = 480, H = 720) {
   prims.push({ kind: 'hero-text', box: [m + 20, hy + 62, cw - 40, 24], text: 'Weekly summary', size: 20, fill: '#ffffff', weight: 600 });
   prims.push({ kind: 'hero-sub', box: [m + 20, hy + 96, cw - 40, 18], text: 'All channels performing within range', size: 14, fill: '#ffffff' });
 
-  // Two action buttons
-  const by = hy + 152 + 28;
+  // Two action buttons.
+  //
+  // The vertical gaps below use 32, not 28. The fixture originally used 28 in both places, and
+  // 28 is not on Refactoring UI's spacing scale — a fact only discoverable once the book's
+  // figures were extracted, because the prose states the 25% rule of thumb but never names the
+  // scale. `bench/design-rules-figures.mjs` flags off-scale gaps, and it flagged these two.
+  // See docs/reference/README.md.
+  const by = hy + 152 + 32;
   const bw = 152, bh = 48;
   prims.push({ kind: 'button-primary', box: [m, by, bw, bh], fill: PALETTE.primary, text: 'Export', size: 16, fill: '#ffffff', weight: 600 });
   prims.push({ kind: 'button-secondary', box: [m + bw + 16, by, bw, bh], fill: PALETTE.panel, text: 'Share', size: 16, fill: PALETTE.ink, weight: 600 });
 
-  // List rows
-  const ly = by + bh + 28;
+  // List rows.
+  //
+  // Row pitch is 48, not 64. Moving the block above down to the on-scale 32px gap pushed the
+  // final row 4px past the 720px canvas, and the unit test "cleanSpec is deterministic and
+  // self-consistent" caught it. The fix follows Refactoring UI's own advice for a dense list
+  // (p.69, "dense UIs have their place") rather than shaving a value off the scale: 48 is a
+  // legitimate step.
+  //
+  // ROW_H is 48 rather than 40 so the content ends exactly 32px above the canvas floor. A 40px
+  // row left a 38px trailing margin, which is off the book's scale — the figure-sourced checker
+  // caught that too. The page now closes on a scale value at both ends.
+  const ly = by + bh + 32;
+  const ROW_PITCH = 48, ROW_H = 48;
   for (let i = 0; i < 3; i++) {
-    const ry = ly + i * 64;
-    prims.push({ kind: `row-${i}`, box: [m, ry, cw, 52], fill: PALETTE.panel });
-    prims.push({ kind: `row-text-${i}`, box: [m + 16, ry + 30, cw - 200, 18], text: `Transaction ${i + 1}`, size: 15, fill: PALETTE.ink });
-    prims.push({ kind: `row-amount-${i}`, box: [m + cw - 140, ry + 30, 124, 18], text: `$${(i + 1) * 37}.00`, size: 15, fill: PALETTE.muted, anchor: 'end' });
+    const ry = ly + i * ROW_PITCH;
+    prims.push({ kind: `row-${i}`, box: [m, ry, cw, ROW_H], fill: PALETTE.panel });
+    prims.push({ kind: `row-text-${i}`, box: [m + 16, ry + 30, cw - 200, 16], text: `Transaction ${i + 1}`, size: 15, fill: PALETTE.ink });
+    prims.push({ kind: `row-amount-${i}`, box: [m + cw - 140, ry + 30, 124, 16], text: `$${(i + 1) * 37}.00`, size: 15, fill: PALETTE.muted, anchor: 'end' });
   }
 
   return { W, H, prims };
