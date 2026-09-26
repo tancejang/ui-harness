@@ -199,6 +199,35 @@ test('decide() is auditable: every verdict carries a reason and features', async
   }
 });
 
+/**
+ * REGRESSION: the typography rules must not claim a displaced panel at low severity.
+ *
+ * A critic swept changedRows/geoEnergy over 79 magnitudes and found the `ratio > 50` cut sits
+ * INSIDE the geometry range below the eval band: typography's ratio collapses to 0 once the
+ * glyph change is sub-pixel (no row changes at all), while geometry keeps moving whole panels
+ * and its ratio climbs to 73.6. The rules therefore carry two preconditions — the text band
+ * must actually have churned (>= 24 rows) and the difference must be measurable at all
+ * (geoEnergy >= 0.6). Without them a small panel displacement is read as a font change.
+ *
+ * The assertions below encode the real detection floor rather than a wish:
+ *   mag >= 0.012  (>= 0.22px displacement)  -> must be `geometry`
+ *   mag <  0.012  (sub-pixel)               -> must NOT be a wrong defect class; `clean` is
+ *                                              the honest answer for an invisible edit
+ */
+test('REGRESSION: low-severity geometry is never misread as typography', async () => {
+  for (const mag of [0.012, 0.015, 0.020, 0.030, 0.045]) {
+    const { spec } = applyDefect(cleanSpec(), 'geometry', mag);
+    const d = await classify(refPng, await renderSpec(spec, { scale }));
+    assert.equal(d.label, 'geometry', `geometry at mag ${mag} was read as ${d.label} :: ${d.reason}`);
+  }
+  for (const mag of [0.008, 0.010]) {
+    const { spec } = applyDefect(cleanSpec(), 'geometry', mag);
+    const d = await classify(refPng, await renderSpec(spec, { scale }));
+    assert.ok(d.label === 'clean' || d.label === 'geometry',
+      `sub-pixel geometry at mag ${mag} was read as ${d.label}, which is a wrong defect class :: ${d.reason}`);
+  }
+});
+
 // ---------------------------------------------------------------- design rules
 
 test('contrastRatio matches hand-derived WCAG values', () => {

@@ -436,13 +436,19 @@ export function decide(m) {
   //     whole panel moving a lot. So the separator is changedRows per unit of
   //     structural energy.
   //
-  //     Measured over mag 0.06..1.0 at scale 4:
+  //     IMPORTANT: this ratio is only meaningful where the glyphs actually moved. Measured
+  //     across a wide magnitude range, typography's ratio COLLAPSES TO 0 below about mag 0.013,
+  //     because the glyph change is then sub-pixel and no row changes at all — while geometry
+  //     keeps moving whole panels and its ratio climbs to 73.6. A naive `ratio > 50` test
+  //     therefore sits INSIDE the geometry range at low severity and would claim a displaced
+  //     panel as a font change. Within the eval band (0.03..0.06) the gap is real:
   //       geometry    ratio 24.0 .. 45.0
   //       spacing     ratio 16.8 .. 21.9
-  //       typography  ratio 56.5 .. 100.0     <- clean gap above the layout classes
-  //     A cut at 50 sits inside that gap. (`color`/`imagery` also give high ratios, since
-  //     a repaint touches every row at low energy, but both are decided by their
-  //     orthogonal saturation/hue rules above and never reach this branch.)
+  //       typography  ratio 56.5 .. 100.0
+  //     but the rule must not be relied on outside it, so it carries an explicit precondition
+  //     that the text band actually changed (`hadTextChurn`), which is what fails at low
+  //     severity. This was found by a critic that swept the ratio over 79 magnitudes; the
+  //     earlier comment claiming "geometry 24.0..45.0" was simply false beyond the band.
   //
   //     |relText| alone is NOT sufficient: supersampled antialiasing gives pure
   //     translation a few percent of apparent ink change (geometry spans -0.014..+0.107),
@@ -452,16 +458,35 @@ export function decide(m) {
   //     geometry range and swallowed every geometry case. It is kept below only as a
   //     cheap upper bound on what this rule may claim.
   const churnRatio = geoEnergy > 0 ? changedRows / geoEnergy : Infinity;
-  if (churnRatio > 50 && geoEnergy < 12 && changedRows >= 8) {
+  // Precondition, in two parts, both derived from the sub-pixel regime:
+  //
+  //   hadTextChurn   changedRows >= 24. Glyph re-rasterisation always moves many rows; a
+  //                  sub-pixel panel displacement moves few. Without this the ratio is
+  //                  undefined-ish at low severity and misclassifies displaced panels.
+  //   measurable     geoEnergy >= 0.6. Below this the images are effectively the same and
+  //                  `relText` is dominated by antialiasing reshuffling rather than by any
+  //                  real edit. Measured: geometry at mag 0.008 (0.14px) gives geoEnergy 0.38
+  //                  with relText +15.7%, and at mag 0.010 gives 0.47 with relText +11.1%.
+  //                  Neither is a font change; both are noise. Real typography at the eval
+  //                  band produces geoEnergy 0.86..2.5.
+  const hadTextChurn = changedRows >= 24;
+  const measurable = geoEnergy >= 0.6;
+  if (hadTextChurn && measurable && churnRatio > 50 && geoEnergy < 12) {
     push(`high row churn per unit structural energy (changedRows=${changedRows} / geo=${geoEnergy.toFixed(2)} = ${churnRatio.toFixed(1)}, text mass ${(relText * 100).toFixed(1)}%) -> in-place glyph re-rasterisation`);
     return { label: 'typography', confidence: 0.8, reason: notes.join('; '), features: m };
   }
-  if (Math.abs(relText) > 0.08 && geoEnergy < 12) {
-    push(`text mass changed ${(relText * 100).toFixed(1)}% with near-static layout (geo=${geoEnergy.toFixed(1)})`);
+  // The two plain text-mass rules below carry the SAME precondition as the ratio rule above,
+  // and for the same reason: text mass can appear to change by a double-digit percentage when
+  // a panel moves by a fraction of a pixel, because sub-pixel antialiasing reshuffles gradient
+  // pixels without anything actually being re-rasterised. Measured: geometry at mag 0.008 gives
+  // geoEnergy 0.4 with relText +15.7%, which the bare `|relText| > 0.08` test read as a font
+  // change. Re-rasterising glyphs always changes rows; a sub-pixel displacement does not.
+  if (hadTextChurn && measurable && Math.abs(relText) > 0.08 && geoEnergy < 12) {
+    push(`text mass changed ${(relText * 100).toFixed(1)}% across ${changedRows} rows with near-static layout (geo=${geoEnergy.toFixed(1)})`);
     return { label: 'typography', confidence: 0.8, reason: notes.join('; '), features: m };
   }
-  if (Math.abs(relText) > 0.18 && geoEnergy < 55) {
-    push(`text mass changed ${(relText * 100).toFixed(1)}% with low displacement (geo=${geoEnergy.toFixed(1)})`);
+  if (hadTextChurn && measurable && Math.abs(relText) > 0.18 && geoEnergy < 55) {
+    push(`text mass changed ${(relText * 100).toFixed(1)}% across ${changedRows} rows with low displacement (geo=${geoEnergy.toFixed(1)})`);
     return { label: 'typography', confidence: 0.7, reason: notes.join('; '), features: m };
   }
 
