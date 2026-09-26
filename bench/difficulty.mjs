@@ -34,8 +34,16 @@ for (const mag of mags) {
   console.log(String(mag).padEnd(8) + cells.join(''));
 }
 
-// Detail on the first band that is not perfect, so a builder knows exactly what to fix.
-for (const probe of [0.03, 0.015]) {
+// Detail probes. These used to be hard-coded at [0.03, 0.015], which went stale as the band
+// rotated. They are now derived from the current band: one just inside its lower edge and one
+// just below it, so the detail always shows the boundary that actually matters.
+const BAND_CFG = JSON.parse(await (await import('node:fs/promises')).readFile(
+  new URL('./eval-band.json', import.meta.url), 'utf8'));
+const PROBES = [
+  +(BAND_CFG.band[0] * 0.6).toFixed(5),   // below the band: where classes start failing
+  +BAND_CFG.band[0].toFixed(5),           // at the band's lower edge
+];
+for (const probe of PROBES) {
   console.log(`\n--- failure detail at mag ${probe} ---`);
   for (const cls of CLASSES) {
     const spec = applyDefect(cleanSpec(), cls, probe).spec;

@@ -102,15 +102,31 @@ const say = s => { log.push(s); console.log(s); };
 
 // ---------------------------------------------------------------- C4
 {
-  say('C4 noise floor (1px sub-threshold jitter must read as clean)');
-  const s = clone(cleanSpec());
-  // 1px jitter is inaudible to the thresholds.
-  for (const p of sel(s, 'hero-panel')) { p.box[0] += 1; }
-  const png = await renderSpec(s, { scale: RENDER_SCALE });
-  const m = await measurePair(refPng, png);
-  const r = await classify(refPng, png);
-  say(`  geoEnergy=${m.geoEnergy.toFixed(3)} changedRows=${m.changedRows} -> "${r.label}"`);
-  say(`  ${r.label === 'clean' || m.geoEnergy < 12 ? 'PASS' : 'FAIL'}: below-threshold noise is not reported as a defect class.`);
+  say('C4 noise floor (sub-threshold jitter must read as clean, not as a defect class)');
+
+  // This control previously asserted `label === 'clean' || geoEnergy < 12`. The second clause
+  // is true for essentially every low-magnitude verdict whatever its label, so the control
+  // could not fail: it printed `-> "geometry"` and still reported PASS. A critic measured that
+  // 39 of 46 in-band wrong verdicts satisfied that escape hatch. The escape hatch is gone.
+  //
+  // The honest assertion is what the title says: a jitter small enough to be invisible must be
+  // reported as `clean`. Anything else — including a confident defect label — is a failure.
+  const JITTERS = [0.5, 1, 2];
+  let worst = null;
+  let failures = 0;
+  for (const dx of JITTERS) {
+    const s = clone(cleanSpec());
+    for (const p of sel(s, 'hero-panel')) { p.box[0] += dx; }
+    const png = await renderSpec(s, { scale: RENDER_SCALE });
+    const m = await measurePair(refPng, png);
+    const r = await classify(refPng, png);
+    const ok = r.label === 'clean';
+    if (!ok) failures++;
+    if (!worst) worst = { dx, m, r, ok };
+    say(`  jitter ${dx}px: geoEnergy=${m.geoEnergy.toFixed(3)} changedRows=${m.changedRows} -> "${r.label}" ${ok ? '' : ' <-- wrong'}`);
+  }
+  say(`  ${failures === 0 ? 'PASS' : 'FAIL'}: ${failures}/${JITTERS.length} jitter magnitudes were reported as a defect class.`);
+  if (failures) say('  (a jitter this small is below every detection floor, so `clean` is the only correct answer)');
   say('');
 }
 

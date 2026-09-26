@@ -49,21 +49,60 @@ and `seed-sweep.mjs`. They used to carry independent copies and silently drifted
 | TRAIN | 0.75 – 1.00 | 24 | Obvious defects. Judge thresholds were set against this regime. |
 | EVAL (held out) | **0.03 – 0.06** | 24 | The regime where the judge measurably breaks. |
 
-### The band moves when it saturates
+### The band moves when it saturates — and one class cannot be graded by a band
 
-A band that scores 1.0000 cannot distinguish a better judge from the current one, so it stops
-being an improvement signal. Whenever that happens the band is lowered to wherever the judge
-actually fails, using `difficulty.mjs`. This has happened three times:
+A band that scores 1.0000 cannot distinguish a better judge from the current one. The band has
+been lowered three times using `difficulty.mjs`:
 
 | Band | Outcome |
 |---|---|
-| `[0.06, 0.11]` | First band after de-quantization. Solved to **30/30 perfect seeds, 720 cases, 0 failures** → retired. |
-| `[0.03, 0.06]` | Second. Chosen where typography scored 4/5. Also solved to saturation → retired. |
-| `[0.01, 0.02]` | **Current.** Chosen after the clean-gate and confinement fixes lowered every detection floor. Typography is the sole weak class (50% failure). |
+| `[0.06, 0.11]` | First band after de-quantization. Solved to **30/30 perfect seeds**, retired. |
+| `[0.03, 0.06]` | Second. Also solved to saturation, retired. |
+| `[0.01, 0.02]` | Third. **Retired as unsound** — see the cliff below. |
+| `[0.015, 0.0195]` | **Current.** Sits entirely above the cliff; the score is a regression gate. |
 
-`seed-sweep.mjs` prints `SATURATED` and **exits 3** when a band is solved, rather than quietly
-reporting a perfect score as though it were informative. On the current band it reports
-`has headroom (weak classes: typography)`.
+### The typography cliff (why the current band is not a "gradient")
+
+`typography` has an **irreducible detection cliff at magnitude ≈ 0.0148**. Measured at 0.00025
+resolution, `changedRows` jumps **12 → 25 in a single step**, so the class flips from
+always-wrong to always-right across a transition narrower than 0.001.
+
+This is **not** a threshold artefact. Replacing the binary gate with a continuous comparative
+predicate (`changedRows > 22 × geoEnergy`) left the cliff unchanged. The cause is **glyph
+hinting in the rasterizer**: the spec's font size is continuous (25.89 → 25.88) while the
+rendered glyph grid is not, so crossing a pixel boundary re-snaps every row the glyph occupies.
+
+Consequently **every band that yields an intermediate typography score straddles the cliff**, and
+its score measures band placement rather than judge quality:
+
+| band | typography | status |
+|---|---|---|
+| `[0.0100, 0.0145]` | 0/5 | below the cliff — degenerate |
+| `[0.0150, 0.0195]` | 5/5 | above the cliff — saturated |
+| `[0.0140, 0.0175]` | 4/5 | straddles the cliff — score is a step |
+| `[0.0125, 0.0165]` | 2/5 | straddles the cliff — score is a step |
+
+So the current band is placed **above** the cliff and the score is reported as a **regression
+gate**, not a capability gradient. `seed-sweep.mjs` exits 3 when the band saturates, which is now
+the expected steady state. See [`docs/STALL-LOG.md`](../docs/STALL-LOG.md) for the full diagnosis
+and the suggested escape (use typography defects that do not depend on sub-pixel *size* changes,
+such as weight, letter-spacing or line-height).
+
+### Rendering resolution
+
+Distinct renders across the band, at increasing sample density. `imagery` originally collapsed to
+33/80 because its opacity span was too narrow; raising the gain fixed it.
+
+| class | 24 samples | 48 | 80 |
+|---|---|---|---|
+| geometry | 24/24 | 48/48 | 80/80 |
+| spacing | 24/24 | 48/48 | 80/80 |
+| color | 24/24 | 48/48 | 80/80 |
+| imagery | 24/24 | 48/48 | 80/80 |
+| typography | 24/24 | 48/48 | **66/80** ← the hinting cliff |
+
+`run.mjs` probes the band ceiling every run and warns when any non-clean class falls below 90%.
+
 
 ### Detection floors
 

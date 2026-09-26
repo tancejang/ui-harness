@@ -297,12 +297,24 @@ function perturbColor(spec, mag) {
  * background as if the asset failed to load. Orthogonal to `color`: saturation collapses
  * while the little hue that remains stays put.
  *
- * Expressed as a pale overlay whose OPACITY carries the severity, so every magnitude in the
- * band composites to a genuinely different colour rather than rounding onto its neighbours.
+ * Expressed as a pale overlay whose OPACITY carries the severity. Two things matter here:
+ *
+ *  1. Opacity, not colour, because the SVG rasterizer rounds colour channels but composites
+ *     alpha at higher precision (see probe notes in the commit that introduced this).
+ *  2. The GAIN has to be large enough that the band's opacity span is wide in absolute terms.
+ *     With a gain of 8 the band `[0.015, 0.0195]` only spanned opacity 0.120..0.156 — 0.036 of
+ *     the range, i.e. about nine 8-bit compositing levels — and 80 fine samples collapsed to 33
+ *     distinct renders. The gain is now set so the top of the band lands near 0.75, giving the
+ *     band a span of roughly 0.19 and comfortably more resolution than the sample counts used.
+ *
+ * The overlay is the pale page colour, so a fully-opaque overlay means "the panel has become
+ * the background", which is exactly the failed-to-load semantics.
  */
+const IMAGERY_GAIN = 48;
+
 function perturbImagery(spec, mag) {
   const s = clone(spec);
-  const t = Math.min(0.985, mag * 8);
+  const t = Math.min(0.985, mag * IMAGERY_GAIN);
   for (const p of find(s, 'hero-panel')) p.overlay = { fill: '#f8fafc', opacity: t };
   for (const p of find(s, 'hero-text')) p.overlay = { fill: '#f8fafc', opacity: t };
   for (const p of find(s, 'hero-sub')) p.overlay = { fill: '#f8fafc', opacity: t };

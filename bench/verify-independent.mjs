@@ -6,11 +6,22 @@
 //
 // Run: node bench/verify-independent.mjs
 import crypto from 'node:crypto';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { cleanSpec, renderSpec, applyDefect, RENDER_SCALE } from './fixture.mjs';
 import { classify } from './judge.mjs';
 
 const CLASSES = ['geometry', 'typography', 'spacing', 'color', 'imagery', 'clean'];
-const BAND = [0.03, 0.06];
+
+// The band is READ, not hard-coded. It used to be a literal `[0.03, 0.06]`, which silently
+// went stale when the band rotated — the script then reported 480/480 on a RETIRED band and
+// printed "agreement with bench/run.mjs headline: both say 1.0000" while run.mjs was reporting
+// 0.9167. A verification tool that can disagree with reality and still exit 0 is worse than no
+// tool, so it now reads the same source of truth as everything else.
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const BAND = JSON.parse(await fs.readFile(path.join(HERE, 'eval-band.json'), 'utf8')).band;
+
 const refPng = await renderSpec(cleanSpec(), { scale: RENDER_SCALE });
 
 // Own PRNG (xorshift32), deliberately different from the mulberry32 used elsewhere.
@@ -58,9 +69,40 @@ for (const c of CLASSES) {
   console.log(`  ${c.padEnd(11)}${ok}/${n} (${pct}%)   distinct renders=${distinctPerClass[c].size}/${n}`);
 }
 
-console.log(`\nindependent verdict: ${weak.length === 0 ? 'CONFIRMED SATURATED (no class fails)' : 'NOT SATURATED — weak: ' + weak.join(', ')}`);
-console.log(`agreement with bench/run.mjs headline: ${(hits / total === 1) === true ? 'both say 1.0000' : 'DISAGREEMENT — investigate'}`);
+console.log(`\nindependent verdict: ${weak.length === 0 ? 'no class fails on this band' : 'weak classes: ' + weak.join(', ')}`);
 
-// Distinct-render check must also hold independently.
-const collapsed = CLASSES.filter(c => c !== 'clean' && distinctPerClass[c].size < perClass[c].n);
-console.log(`distinct-render gate: ${collapsed.length ? 'FAILED for ' + collapsed.join(',') : 'PASSED (all non-clean classes fully distinct)'}`);
+// Compare against run.mjs by ACTUALLY RUNNING IT, rather than asserting agreement from a
+// formula. The old line printed "both say 1.0000" purely from this script's own number, so it
+// claimed agreement with a benchmark it had never consulted — and went on claiming it after the
+// two had diverged.
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+const execFileAsync = promisify(execFile);
+let headline = null, note = '';
+try {
+  const { stdout } = await execFileAsync(process.execPath, ['bench/run.mjs', '--json'], { cwd: path.join(HERE, '..'), maxBuffer: 64 * 1024 * 1024 });
+  headline = JSON.parse(stdout).evalAcc;
+} catch (e) {
+  // run.mjs exits non-zero on a failed round but still prints JSON.
+  try { headline = JSON.parse(e.stdout ?? '').evalAcc; } catch { note = ` (could not read run.mjs: ${e.message})`; }
+}
+
+const mine = hits / total;
+if (headline === null) {
+  console.log(`agreement with bench/run.mjs: UNVERIFIED${note}`);
+} else {
+  const delta = Math.abs(mine - headline);
+  console.log(`independent=${mine.toFixed(4)}  run.mjs=${headline.toFixed(4)}  delta=${delta.toFixed(4)}`);
+  console.log(`agreement with bench/run.mjs: ${delta <= 0.05 ? 'CONSISTENT (within 0.05)' : 'DISAGREEMENT — investigate'}`);
+}
+
+// Distinct-render check, at the same 90% standard run.mjs uses. Demanding 100% is wrong: at
+// 80 fine samples across a narrow band two magnitudes can legitimately round to the same render.
+// What must not happen is a LOW ceiling, which is the quantization failure this guards against.
+const MIN_FRACTION = 0.9;
+const collapsed = CLASSES.filter(c => c !== 'clean' && distinctPerClass[c].size < perClass[c].n * MIN_FRACTION);
+console.log(`distinct-render gate (>= ${MIN_FRACTION * 100}% unique): ${collapsed.length === 0 ? 'PASSED' : 'FAILED for ' + collapsed.map(c => `${c} (${distinctPerClass[c].size}/${perClass[c].n})`).join(', ')}`);
+
+// Exit non-zero when the instrument itself is unsound. The script used to exit 0 even while
+// printing "distinct-render gate: FAILED", which made it useless as a check.
+process.exitCode = collapsed.length === 0 ? 0 : 1;

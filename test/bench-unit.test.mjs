@@ -8,6 +8,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import sharp from 'sharp';
 
 import { cleanSpec, renderSpec, applyDefect, clone, RENDER_SCALE } from '../bench/fixture.mjs';
@@ -15,6 +18,12 @@ import { measurePair, decide, classify } from '../bench/judge.mjs';
 import {
   contrastRatio, rgbToHsl, spacingSystem, verticalGaps, greyTemperature,
 } from '../bench/design-rules.mjs';
+
+// The band is READ from eval-band.json, never hard-coded. It used to be a literal `[0.03, 0.06]`
+// in two places here, which silently went stale when the band rotated — the tests then passed
+// while exercising a retired difficulty, which is worse than failing.
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const BAND = JSON.parse(await fs.readFile(path.join(HERE, '..', 'bench', 'eval-band.json'), 'utf8')).band;
 
 const scale = RENDER_SCALE;
 const refPng = await renderSpec(cleanSpec(), { scale });
@@ -84,7 +93,7 @@ test('applyDefect is deterministic and rejects unknown classes', () => {
  * all of them be unique, so a re-quantization cannot hide behind a low bar.
  */
 test('REGRESSION: the eval band renders distinct images per class', async () => {
-  const band = [0.03, 0.06];
+  const band = BAND;
   const N = 48;
   for (const cls of ['geometry', 'typography', 'spacing', 'color', 'imagery']) {
     const seen = new Set();
@@ -106,11 +115,21 @@ test('REGRESSION: the eval band renders distinct images per class', async () => 
  * above fails, and this one explains why.
  */
 test('paint defects carry severity as composited opacity, not as a rounded colour', async () => {
-  const a = applyDefect(cleanSpec(), 'imagery', 0.030).spec;
-  const b = applyDefect(cleanSpec(), 'imagery', 0.034).spec;
+  // Sample inside the current band, where the opacity ramp is uncapped. An earlier version of
+  // this test used mag 0.030/0.034, which after the gain increase both hit the 0.985 ceiling —
+  // the test then failed for the right reason and pointed at a real range problem.
+  const lo = BAND[0], hi = BAND[1];
+  const a = applyDefect(cleanSpec(), 'imagery', lo).spec;
+  const b = applyDefect(cleanSpec(), 'imagery', hi).spec;
   const panel = s => s.prims.find(p => p.kind === 'hero-panel');
   assert.ok(panel(a).overlay, 'imagery should emit an overlay for continuous severity');
   assert.notEqual(panel(a).overlay.opacity, panel(b).overlay.opacity);
+  // The ramp must not be clamped anywhere inside the band, or magnitudes would collapse.
+  for (let i = 0; i <= 10; i++) {
+    const mag = lo + (i / 10) * (hi - lo);
+    const o = panel(applyDefect(cleanSpec(), 'imagery', mag).spec).overlay.opacity;
+    assert.ok(o < 0.98, `imagery opacity ${o} at mag ${mag} is at the clamp`);
+  }
   // And those distinct opacities must survive rendering.
   const pa = await renderSpec(a, { scale });
   const pb = await renderSpec(b, { scale });
@@ -176,7 +195,7 @@ test('measurePair rejects size mismatches instead of guessing', async () => {
  * classification must be the class that was actually injected.
  */
 test('each defect class is correctly classified across the eval band', async () => {
-  const band = [0.03, 0.06];
+  const band = BAND;
   for (const cls of ['geometry', 'typography', 'spacing', 'color', 'imagery', 'clean']) {
     for (let i = 0; i <= 4; i++) {
       const mag = band[0] + (i / 4) * (band[1] - band[0]);
@@ -235,6 +254,72 @@ test('REGRESSION: sub-pixel edit magnitudes never produce a wrong defect class',
       assert.ok(d.label === 'clean' || d.label === cls,
         `${cls} at sub-floor mag ${mag} was read as ${d.label} :: ${d.reason}`);
     }
+  }
+});
+
+/**
+ * REVERT-DETECTING TEST: the clean gate's row-churn requirement.
+ *
+ * A critic reverted each recent fix and re-ran the suite. Removing the clean gate's
+ * `changedRows <= 20` clause left 22/22 tests PASSING, despite that revert swallowing **100% of
+ * typography cases across the whole band** — a catastrophic regression that no test noticed.
+ * This test exists to notice it.
+ *
+ * With the clause removed, `clean` fires on low-magnitude typography (its geoEnergy, relChanged
+ * and relText are all small) and the class is never reported. So we assert that typography is
+ * detected at magnitudes where its only competing claimant would be `clean`.
+ */
+test('REVERT-DETECTING: the clean gate does not swallow low-severity typography', async () => {
+  // These magnitudes sit below the band's centre but above typography's own floor; without the
+  // row-churn clause in the clean gate they are reported as `clean`.
+  const mags = [0.0155, 0.0165, 0.018, 0.0195];
+  for (const mag of mags) {
+    const { spec } = applyDefect(cleanSpec(), 'typography', mag);
+    const d = await classify(refPng, await renderSpec(spec, { scale }));
+    assert.equal(d.label, 'typography',
+      `typography at mag ${mag} was reported as ${d.label} — the clean gate is too permissive :: ${d.reason}`);
+  }
+});
+
+/**
+ * REVERT-DETECTING TEST: the text-churn precondition on the text-mass rules.
+ *
+ * The same critic found that reverting the churn precondition also left 22/22 passing. Without
+ * it, a sub-pixel panel displacement is claimed as a font change. The existing geometry test
+ * only asserted "not typography", which that revert did not break; this one asserts the positive
+ * behaviour that the precondition protects: a sub-pixel displacement must not be called
+ * typography, at magnitudes where the displacement itself is also too small to call geometry.
+ */
+test('REVERT-DETECTING: the text-churn precondition blocks noise-driven typography', async () => {
+  // 0.008-0.012 of geometry is a 0.14-0.22px displacement: too small to be confidently
+  // `geometry` in every sample, but never a glyph change. Without the precondition these were
+  // read as typography because sub-pixel antialiasing reshuffles gradient pixels.
+  for (const mag of [0.008, 0.009, 0.010, 0.011]) {
+    const { spec } = applyDefect(cleanSpec(), 'geometry', mag);
+    const d = await classify(refPng, await renderSpec(spec, { scale }));
+    assert.notEqual(d.label, 'typography',
+      `sub-pixel geometry at mag ${mag} was claimed as typography :: ${d.reason}`);
+  }
+  // The same magnitudes must still be reported honestly for a REAL glyph change, so the
+  // precondition is not simply disabling the rule.
+  const real = await classify(refPng, await renderSpec(applyDefect(cleanSpec(), 'typography', 0.02).spec, { scale }));
+  assert.equal(real.label, 'typography', 'the typography rule must still fire on a real glyph change');
+});
+
+/**
+ * The controls must be able to fail. A control whose assertion is trivially satisfied is worse
+ * than no control: C4 previously read `label === 'clean' || geoEnergy < 12`, and since the second
+ * clause holds for essentially every low-magnitude verdict, it printed `-> "geometry"` and still
+ * reported PASS. This test pins the property that C4 now checks (jitter => clean) so a
+ * re-introduced escape hatch is caught here.
+ */
+test('REVERT-DETECTING: a sub-threshold jitter is reported as clean, not as a defect', async () => {
+  for (const dx of [0.5, 1, 2]) {
+    const s = clone(cleanSpec());
+    for (const p of s.prims.filter(p => p.kind === 'hero-panel')) p.box[0] += dx;
+    const d = await classify(refPng, await renderSpec(s, { scale }));
+    assert.equal(d.label, 'clean',
+      `${dx}px hero jitter was reported as ${d.label}; a jitter this small is below every detection floor :: ${d.reason}`);
   }
 });
 

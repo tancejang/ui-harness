@@ -356,8 +356,15 @@ export function decide(m) {
   // bottom third. A displaced rigid block concentrates its whole difference in one third even
   // when the displacement is a fifth of a pixel, so requiring much energy here would only
   // re-hide low-severity geometry — which is exactly what an earlier `geoEnergy > 0.5` floor
-  // did. The floor exists solely to exclude byte-identical images, where every third is 0.
-  const confined = geoEnergy > 0.15 && thirdMax > 0.9 && Math.max(...thirdOthers) < 0.1;
+  // did. The floor exists to exclude images that are effectively identical.
+  //
+  // `changedRows > 0` is the other half of that exclusion, and it is not redundant: a 1px
+  // hero jitter gives changedRows = 0 (no row differs enough to count) while still yielding
+  // geoEnergy 0.296 and fracMid 1.000, so an energy-only floor reported a sub-threshold jitter
+  // as a confident `geometry`. Moving a rigid block necessarily changes rows; if none changed,
+  // nothing moved in any structural sense. Found by making control C4 a real assertion instead
+  // of one that could not fail.
+  const confined = geoEnergy > 0.15 && changedRows > 0 && thirdMax > 0.9 && Math.max(...thirdOthers) < 0.1;
 
   // --- 2. clean: essentially no difference anywhere -------------------------
   //
@@ -478,20 +485,30 @@ export function decide(m) {
   //     geometry range and swallowed every geometry case. It is kept below only as a
   //     cheap upper bound on what this rule may claim.
   const churnRatio = geoEnergy > 0 ? changedRows / geoEnergy : Infinity;
-  // Preconditions, derived from the sub-pixel regime where these rules previously misfired.
+  // Preconditions. An earlier version used a hard binary gate, `changedRows >= 24`, which a
+  // critic showed puts the SCORE on a cliff: changedRows jumps 12 -> 27 across a single
+  // 0.00025 magnitude step, so typography flips from always-wrong to always-right over a
+  // transition narrower than 0.001. That made the benchmark's headline score a step function
+  // of band placement rather than a measure of judge quality — moving the band slightly
+  // changed the score by 3 of 4 cases with no change to the judge at all.
   //
-  //   hadTextChurn  changedRows >= 24. Glyph re-rasterisation always moves many rows; a
-  //                 sub-pixel panel displacement moves few.
+  // The fix is to make the test COMPARATIVE rather than a fixed bar. A rigid panel
+  // displacement concentrates its difference into one third and changes rows roughly in
+  // proportion to the energy it spends; glyph re-rasterisation changes far more rows than its
+  // energy would predict. So instead of "did more than N rows change", we ask "did more rows
+  // change than this much structural energy can account for", which degrades smoothly:
   //
-  // An earlier attempt also required `geoEnergy >= 0.6`. That was too blunt: it fixed
-  // low-magnitude geometry but simultaneously blocked low-magnitude TYPOGRAPHY, which is
-  // genuinely detectable there (at mag 0.022 typography gives geoEnergy 0.64, changedRows 43
-  // and a ratio of 67). The discriminator between the two at low severity is not the energy
-  // but the row count: typography churns 40-58 rows while a 0.14px displacement churns 16.
-  // So the guard belongs on `changedRows` alone, which `hadTextChurn` already encodes.
-  const hadTextChurn = changedRows >= 24;
-  if (hadTextChurn && churnRatio > 50 && geoEnergy < 12) {
-    push(`high row churn per unit structural energy (changedRows=${changedRows} / geo=${geoEnergy.toFixed(2)} = ${churnRatio.toFixed(1)}, text mass ${(relText * 100).toFixed(1)}%) -> in-place glyph re-rasterisation`);
+  //   expectedRows = ROWS_PER_ENERGY * geoEnergy    (calibrated from the layout classes)
+  //   textChurn    = changedRows > expectedRows
+  //
+  // Measured ROWS_PER_ENERGY for the layout classes (geometry, spacing) across the whole
+  // severity range is 17..27 per unit energy; typography sits at 60..100. A factor of 2.2
+  // therefore sits in the gap AND scales continuously, so there is no cliff edge to land on.
+  const ROWS_PER_ENERGY = 22;
+  const expectedRows = ROWS_PER_ENERGY * geoEnergy;
+  const textChurn = changedRows > expectedRows;
+  if (textChurn && churnRatio > 50 && geoEnergy < 12) {
+    push(`high row churn per unit structural energy (changedRows=${changedRows} / geo=${geoEnergy.toFixed(2)} = ${churnRatio.toFixed(1)}, layout classes predict <= ${expectedRows.toFixed(0)} rows, text mass ${(relText * 100).toFixed(1)}%) -> in-place glyph re-rasterisation`);
     return { label: 'typography', confidence: 0.8, reason: notes.join('; '), features: m };
   }
   // The two plain text-mass rules below carry the SAME precondition as the ratio rule above,
@@ -499,12 +516,12 @@ export function decide(m) {
   // a panel moves by a fraction of a pixel, because sub-pixel antialiasing reshuffles gradient
   // pixels without anything actually being re-rasterised. Measured: geometry at mag 0.008 gives
   // geoEnergy 0.4 with relText +15.7%, which the bare `|relText| > 0.08` test read as a font
-  // change. Re-rasterising glyphs always changes rows; a sub-pixel displacement does not.
-  if (hadTextChurn && Math.abs(relText) > 0.08 && geoEnergy < 12) {
+  // change. Re-rasterising glyphs changes more rows than the movement can explain.
+  if (textChurn && Math.abs(relText) > 0.08 && geoEnergy < 12) {
     push(`text mass changed ${(relText * 100).toFixed(1)}% across ${changedRows} rows with near-static layout (geo=${geoEnergy.toFixed(1)})`);
     return { label: 'typography', confidence: 0.8, reason: notes.join('; '), features: m };
   }
-  if (hadTextChurn && Math.abs(relText) > 0.18 && geoEnergy < 55) {
+  if (textChurn && Math.abs(relText) > 0.18 && geoEnergy < 55) {
     push(`text mass changed ${(relText * 100).toFixed(1)}% across ${changedRows} rows with low displacement (geo=${geoEnergy.toFixed(1)})`);
     return { label: 'typography', confidence: 0.7, reason: notes.join('; '), features: m };
   }
