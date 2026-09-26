@@ -407,13 +407,77 @@ backs a `[MEASURABLE]` rule can be turned into another falsifiable check — the
 
 ---
 
+## Cycle 9 — the gap the user caught: wiring the knowledge into a run (`537c30c`)
+
+The user asked whether any of this improves UIH when it is actually used, and observed that `src/`
+had not changed since the first commit. **That was correct and it was the most important finding
+of the whole run.** `bench/` and `docs/` built a measuring apparatus; none of it reached the
+coordinator. Verified before acting:
+
+```
+git log --oneline 6644320..HEAD -- src/      -> 0 commits
+git log --oneline 6644320..HEAD -- plugins/  -> 0 commits
+grep DESIGN-RUBRIC|design-rules src/*.mjs    -> no matches
+```
+
+So there were two disconnected worlds: what I built (`bench/`, `docs/`) and what UIH runs
+(`src/`, `plugins/`, `skills/`). My earlier summaries said "this improved UIH"; what they had
+actually improved was the benchmark and the fixture. Corrected here.
+
+### Three connections made
+1. **The skill** (`skills/visual-quality/SKILL.md`) — `skillContext()` loads installed skill
+   files directly into every model prompt, so the skill *is* the lever. It carried the right
+   safety constraints but **no thresholds**, which is precisely the "reviewing from random
+   knowledge" problem. It now carries the sourced rules with ids and pages: the real spacing
+   scale from p.73, CO-6's 4.5:1, CO-4's measured saturation behaviour, CO-5's grey temperature,
+   plus `TY-*`, `HI-*`, `DE-*`, `IM-*`. 7.3KB, well inside the 64KB per-file cap.
+2. **The bridge** (`bench/design-findings.mjs` + `src/runner.mjs`) — `review()` now measures the
+   rendered candidate and attaches `designFindings` to every critic and judge request, each
+   naming rule id, page, measured value, evidence and a suggested fix. It reads the PNG already
+   being sent, so there is no extra capture cost.
+3. **The prompt** (`plugins/codex/contracts.mjs`) — the reviewer is told the field exists and,
+   deliberately, to treat it as **evidence to investigate** rather than truth: verify against the
+   images, and if they contradict a measurement, say so and mark the rule `unverified` rather
+   than dropping it. A deterministic measurement can still be wrong about *intent* — a
+   deliberately dense dashboard is not a spacing defect.
+
+### Verification
+- `test/design-bridge.test.mjs` (7 tests) exercises the bridge and includes a **REGRESSION test
+  asserting the wiring exists** in `src/runner.mjs`, `plugins/codex/contracts.mjs` and the skill,
+  so it cannot silently come undone.
+- `examples/design-findings-smoke.mjs` runs the **real coordinator** against a recorder plugin
+  and proves the payload reaches the plugin boundary: **critic 1/1, judge 2/2** requests carried
+  `designFindings`. The demo alone could not show this — its fixture plugin ignores extra fields.
+
+### Two bugs found while wiring, both "verdict from absent data"
+- `CO-6` reported `p05=0.00` with `n=0` on a text-free capture. With no measurable text edges the
+  rule is **unverifiable, not failing**; it now returns `null` below 50 edges.
+- `CO-2` reported a palette failure on a single-colour image; it now returns `null` when there is
+  no ramp to judge.
+- Also: `unverified` was a bare count, so the caller could not tell *which* rule was unjudgeable.
+  It now returns `unverifiedIds`. Separately, `design-findings.mjs` had been looking for
+  `ok === null` inside `findings`, where unverified rules are never pushed, so it always reported
+  an empty list.
+
+**127 tests pass** (was 120). Demo, all five controls, and the design-findings smoke all exit 0.
+
+---
+
 ## Consolidated state
 
-- **15 commits pushed to `main`**; local HEAD == `origin/main` at every checkpoint.
-- 8 recorded cycles in `.uih/agent/`, each with before/after scores and a critic verdict, rendered
-  into `.uih/agent/progress.html`.
-- `npm test`: **120 passing** (was 95 at the start).
+- **16 commits pushed to `main`**; local HEAD == `origin/main` at every checkpoint.
+- 9 recorded cycles in `.uih/agent/`, rendered into `.uih/agent/progress.html`.
+- `npm test`: **127 passing** (was 95 at the start).
+- **Runtime path** (`src/`, `plugins/`, `skills/`) is now connected to the knowledge base.
 - Every score line carries all five required values; baseline sanity is asserted, not assumed.
+
+### What still does NOT hold
+- **No end-to-end quality measurement exists.** Nothing has compared UIH output against a baseline
+  on a real app. The design rules now reach the reviewer, but whether that produces *better UI*
+  is unmeasured. `docs/BENCHMARK.md`'s original plan — blind human comparison against the Codex
+  app on a real screen — remains unexecuted and is the only thing that would answer it.
+- The benchmark still measures six synthetic defect classes on one fixture layout.
+- ~250 of the 284 extracted figures remain uninterpreted.
 
 ---
 
