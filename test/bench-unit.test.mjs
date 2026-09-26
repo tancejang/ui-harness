@@ -73,18 +73,48 @@ test('applyDefect is deterministic and rejects unknown classes', () => {
  * REGRESSION: coordinate quantization.
  * The original eval split used Math.round on every displacement, so an entire magnitude
  * band collapsed into a handful of identical images (24 declared cases -> 7 distinct).
- * This asserts the band admits real variety.
+ *
+ * A later critic found the SAME defect surviving in the paint classes by a different route:
+ * mixed colours were rounded to 8-bit hex, so `color` produced only 15 distinct images across
+ * the whole band and `imagery` 16 — invariant to RENDER_SCALE, because the loss happened in
+ * colour, not in pixels. Sampling 12 points with a `>= 10` bar let that pass at 12/12 while
+ * the true ceiling was 15.
+ *
+ * This test therefore samples enough points to exceed the old ceiling and demands that nearly
+ * all of them be unique, so a re-quantization cannot hide behind a low bar.
  */
 test('REGRESSION: the eval band renders distinct images per class', async () => {
   const band = [0.03, 0.06];
+  const N = 48;
   for (const cls of ['geometry', 'typography', 'spacing', 'color', 'imagery']) {
     const seen = new Set();
-    for (let i = 0; i < 12; i++) {
-      const mag = band[0] + (i / 11) * (band[1] - band[0]);
+    for (let i = 0; i < N; i++) {
+      const mag = band[0] + (i / (N - 1)) * (band[1] - band[0]);
       seen.add(hash(await renderSpec(applyDefect(cleanSpec(), cls, mag).spec, { scale })));
     }
-    assert.ok(seen.size >= 10, `${cls} only produced ${seen.size}/12 distinct renders — quantization is back`);
+    // 90% unique. The old hex-quantized implementation scored 15/48 and 16/48 here and fails.
+    const minUnique = Math.floor(N * 0.9);
+    assert.ok(seen.size >= minUnique,
+      `${cls} produced only ${seen.size}/${N} distinct renders (need >= ${minUnique}) — the band is quantized`);
   }
+});
+
+/**
+ * The paint defects carry severity through alpha compositing, not through computed colour
+ * strings, because sharp's SVG rasterizer rounds colour channels but does not round opacity.
+ * This pins that mechanism: if someone reverts to hex/`rgb()` mixing, the resolution test
+ * above fails, and this one explains why.
+ */
+test('paint defects carry severity as composited opacity, not as a rounded colour', async () => {
+  const a = applyDefect(cleanSpec(), 'imagery', 0.030).spec;
+  const b = applyDefect(cleanSpec(), 'imagery', 0.034).spec;
+  const panel = s => s.prims.find(p => p.kind === 'hero-panel');
+  assert.ok(panel(a).overlay, 'imagery should emit an overlay for continuous severity');
+  assert.notEqual(panel(a).overlay.opacity, panel(b).overlay.opacity);
+  // And those distinct opacities must survive rendering.
+  const pa = await renderSpec(a, { scale });
+  const pb = await renderSpec(b, { scale });
+  assert.notEqual(hash(pa), hash(pb), 'distinct severities must render to distinct images');
 });
 
 /**

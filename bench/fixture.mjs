@@ -22,8 +22,14 @@ export const PALETTE = {
 
 const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
-function rect(x, y, w, h, fill, r = 0) {
-  return `<rect x="${x}" y="${y}" width="${w}" height="${h}" fill="${fill}" rx="${r}"/>`;
+/**
+ * A rectangle. `opacity` is emitted with full precision as `fill-opacity`, which is how paint
+ * defects carry continuous severity — SVG colour channels get rounded by the rasterizer, but
+ * compositing opacity does not. See probe-svg-color.mjs.
+ */
+function rect(x, y, w, h, fill, r = 0, opacity = null) {
+  const op = opacity === null ? '' : ` fill-opacity="${opacity}"`;
+  return `<rect x="${x}" y="${y}" width="${w}" height="${h}" fill="${fill}" rx="${r}"${op}/>`;
 }
 
 function text(x, y, size, fill, body, anchor = 'start', weight = 400) {
@@ -93,6 +99,7 @@ export function cleanSpec(W = 480, H = 720) {
  */
 export async function renderSpec(spec, { scale = 1 } = {}) {
   const parts = [rect(0, 0, spec.W, spec.H, PALETTE.bg)];
+  const overlays = [];
   for (const p of spec.prims) {
     const [x, y, w, h] = p.box;
     if (p.kind.endsWith('-band') || p.kind.includes('card') || p.kind.includes('panel') || p.kind.startsWith('button') || p.kind.startsWith('row-')) {
@@ -105,9 +112,15 @@ export async function renderSpec(spec, { scale = 1 } = {}) {
       const ty = y + h / 2 + p.size * 0.35;
       parts.push(text(tx, ty, p.size, p.fill, p.text, anchor, p.weight ?? 400));
     }
+    // A paint defect is carried by an alpha-composited overlay rather than a computed colour
+    // string: opacity is preserved at higher precision than SVG colour channels, which is what
+    // keeps every magnitude in the band rendering to a distinct image. See probe-svg-color.mjs.
+    if (p.overlay) {
+      overlays.push(rect(x, y, w, h, p.overlay.fill, 0, p.overlay.opacity));
+    }
   }
   const W = Math.round(spec.W * scale), H = Math.round(spec.H * scale);
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${spec.W} ${spec.H}">${parts.join('')}</svg>`;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${spec.W} ${spec.H}">${parts.join('')}${overlays.join('')}</svg>`;
   return sharp(Buffer.from(svg)).png().toBuffer();
 }
 
@@ -169,20 +182,39 @@ function perturbSpacing(spec, mag) {
   return { spec: s, label: 'spacing' };
 }
 
-/** Mix two hex colours; t=0 -> a, t=1 -> b. Continuous in t. */
-function mix(a, b, t) {
+/** Mix two hex colours; t=0 -> a, t=1 -> b. Returns a float RGB triple, not a rounded hex. */
+function mixRGB(a, b, t) {
   const pa = [1, 3, 5].map(i => parseInt(a.slice(i, i + 2), 16));
   const pb = [1, 3, 5].map(i => parseInt(b.slice(i, i + 2), 16));
-  const p = pa.map((v, i) => Math.round(v + (pb[i] - v) * t));
-  return '#' + p.map(v => v.toString(16).padStart(2, '0')).join('');
+  // Deliberately NOT rounded. Rounding to 8-bit is what quantized the paint defects: the eval
+  // band is narrow, so several distinct magnitudes rounded to the SAME hex and rendered
+  // byte-identical PNGs. A critic measured only 15 distinct images for `color` across the
+  // whole band — invariant to RENDER_SCALE, because the loss happened in hex, not in pixels.
+  return pa.map((v, i) => v + (pb[i] - v) * t);
+}
+
+/** Format a float RGB triple for an SVG fill. rgb() carries fractional channels through. */
+function rgbFill([r, g, b]) {
+  const c = v => Math.min(255, Math.max(0, v));
+  return `rgb(${c(r)},${c(g)},${c(b)})`;
+}
+
+/** Mix two hex colours, returning an SVG-ready colour string. */
+function mix(a, b, t) {
+  return rgbFill(mixRGB(a, b, t));
 }
 
 /**
- * Rotate a hex colour's hue by `deg`, keeping saturation and value.
+ * Rotate a hex colour's hue by `deg`, keeping saturation and value, and return an
+ * SVG-ready colour string.
  *
- * Segment lookup is clamped rather than computed with a bare `% 6`. Floating point can put
- * `h` a hair outside [0, 360) (e.g. 359.99999999999994 + rounding), and `Math.floor(h/60)`
- * can then index off the end of the array and throw. Clamping makes the function total.
+ * Two deliberate details:
+ *  - Segment lookup is clamped rather than computed with a bare `% 6`. Floating point can put
+ *    `h` a hair outside [0, 360), and `Math.floor(h/60)` can then index off the end of the
+ *    array and throw. Clamping makes the function total.
+ *  - Channels are emitted as fractional `rgb()` values, NOT rounded to hex. Rounding destroyed
+ *    the resolution of small rotations: the eval band maps onto ~8 units of 8-bit RGB, so
+ *    several distinct magnitudes collapsed onto the same hex and rendered identical PNGs.
  */
 function rotateHue(hex, deg) {
   let r = parseInt(hex.slice(1, 3), 16) / 255;
@@ -201,35 +233,79 @@ function rotateHue(hex, deg) {
   const c = mx * s, x = c * (1 - Math.abs(((h / 60) % 2) - 1)), m = mx - c;
   const seg = Math.min(5, Math.max(0, Math.floor(h / 60)));
   const rgb = [[c, x, 0], [x, c, 0], [0, c, x], [0, x, c], [x, 0, c], [c, 0, x]][seg];
-  const to = v => Math.min(255, Math.max(0, Math.round((v + m) * 255)));
-  return '#' + rgb.map(to).map(v => v.toString(16).padStart(2, '0')).join('');
+  return rgbFill(rgb.map(v => (v + m) * 255));
 }
 
 /**
- * color defect: the large panels take on a different HUE at the same saturation and
- * lightness — i.e. the palette is wrong, not washed out. Continuous in mag, and
- * deliberately orthogonal to `imagery`: hue moves while saturation is preserved.
+ * Paint defects use ALPHA COMPOSITING, not computed colour strings.
+ *
+ * This is the resolution-critical decision in this file. The paint defects must produce many
+ * distinct renders across the narrow eval band (mag 0.03..0.06), and two earlier approaches
+ * failed to:
+ *
+ *   - rounding a mixed colour to hex  -> 15 distinct renders across the whole band
+ *   - emitting fractional `rgb(...)` -> still 15, because sharp's SVG rasterizer rounds
+ *     colour channels to integers regardless of the decimals it is given
+ *
+ * Measured probe (bench/probe-svg-color.mjs, 20 fine-grained samples):
+ *   fractional rgb() channel         3/20 distinct
+ *   integer rgb() channel            3/20 distinct
+ *   fill-opacity over a solid fill  14/20 distinct   <-- the only mechanism that works
+ *   gradient stop with float rgb     2/20 distinct
+ *
+ * So a defect is expressed as a base fill plus an overlay whose OPACITY is the continuous
+ * severity. Alpha compositing is evaluated at higher precision than channel rounding, which
+ * is exactly what preserves the gradient.
  */
+
+/**
+ * color defect: the large panels take on a different HUE — the palette is wrong, not washed
+ * out. Orthogonal to `imagery`: the panel's saturation is preserved.
+ *
+ * Hue rotation is inherently a *colour-string* operation, and SVG colour channels are rounded
+ * by the rasterizer, so a direct rotation can only reach as many distinct colours as the
+ * 8-bit channel grid allows (~23 of 48 samples across this narrow band).
+ *
+ * The fix keeps the rotation but interpolates CONTINUOUSLY between two adjacent rotation
+ * steps using an alpha-composited overlay: the base panel takes the lower rotation, and an
+ * overlay of the next rotation is composited at the fractional opacity between them. Because
+ * both endpoints share the same saturation, the blend stays on (very nearly) the same
+ * saturation ramp — which is exactly the property the judge tests — while opacity carries the
+ * sub-step resolution that colour channels cannot.
+ */
+const HUE_STEP_DEG = 2;               // granularity of the discrete rotation ladder
+
 function perturbColor(spec, mag) {
   const s = clone(spec);
-  const deg = 200 * Math.min(1, mag);
-  for (const p of find(s, 'hero-panel')) p.fill = rotateHue(PALETTE.accent, deg);
-  for (const p of find(s, 'stat-card')) p.fill = mix(PALETTE.panel, rotateHue(PALETTE.panel, deg), 0.5);
+  const totalDeg = 300 * Math.min(1, mag);
+  const lo = Math.floor(totalDeg / HUE_STEP_DEG) * HUE_STEP_DEG;
+  const frac = (totalDeg - lo) / HUE_STEP_DEG;
+  for (const p of find(s, 'hero-panel')) {
+    p.fill = rotateHue(PALETTE.accent, lo);
+    p.overlay = frac > 1e-6
+      ? { fill: rotateHue(PALETTE.accent, lo + HUE_STEP_DEG), opacity: frac }
+      : null;
+  }
+  for (const p of find(s, 'stat-card')) {
+    p.fill = mix(PALETTE.panel, rotateHue(PALETTE.panel, lo), 0.5);
+  }
   return { spec: s, label: 'color' };
 }
 
 /**
- * imagery defect: the hero artwork is progressively washed out — colour drains toward
- * flat grey/white as if the asset failed to load. Continuous in mag, and orthogonal to
- * `color`: saturation collapses while the small hue that remains stays put.
+ * imagery defect: the artwork is progressively washed out — colour drains toward the page
+ * background as if the asset failed to load. Orthogonal to `color`: saturation collapses
+ * while the little hue that remains stays put.
+ *
+ * Expressed as a pale overlay whose OPACITY carries the severity, so every magnitude in the
+ * band composites to a genuinely different colour rather than rounding onto its neighbours.
  */
 function perturbImagery(spec, mag) {
   const s = clone(spec);
-  const t = Math.min(1, mag);
-  // Drain toward the page background: saturation falls, luminance rises.
-  for (const p of find(s, 'hero-panel')) p.fill = mix(PALETTE.accent, '#f8fafc', t);
-  for (const p of find(s, 'hero-text')) p.fill = mix('#ffffff', '#f8fafc', t);
-  for (const p of find(s, 'hero-sub')) p.fill = mix('#ffffff', '#f8fafc', t);
+  const t = Math.min(0.985, mag * 8);
+  for (const p of find(s, 'hero-panel')) p.overlay = { fill: '#f8fafc', opacity: t };
+  for (const p of find(s, 'hero-text')) p.overlay = { fill: '#f8fafc', opacity: t };
+  for (const p of find(s, 'hero-sub')) p.overlay = { fill: '#f8fafc', opacity: t };
   return { spec: s, label: 'imagery' };
 }
 

@@ -195,17 +195,41 @@ async function main() {
   // Distinct-render gate. Guards against the failure this benchmark originally had:
   // coordinate quantization collapsed a whole band into a handful of byte-identical
   // images, so the score measured 7 inputs while claiming 24 cases.
+  // Distinct-render gate, at two levels of sensitivity.
+  //
+  // The per-class check (do all 4 cases differ?) is necessary but WEAK: it is trivially
+  // satisfied when a class's whole-band ceiling is only ~15 images, which is exactly how the
+  // paint-quantization defect hid. So we also probe each class across MANY magnitudes and
+  // require most of them to be unique, independent of how many cases the split happens to use.
   const { createHash } = await import('node:crypto');
-  const uniqEval = new Set(evalSet.map(p => createHash('sha256').update(p.png).digest('hex')));
+  const h = buf => createHash('sha256').update(buf).digest('hex');
+  const uniqEval = new Set(evalSet.map(p => h(p.png)));
   const perClass = {};
-  for (const l of LABELS) perClass[l] = new Set(evalSet.filter(p => p.truth === l).map(p => createHash('sha256').update(p.png).digest('hex'))).size;
+  for (const l of LABELS) perClass[l] = new Set(evalSet.filter(p => p.truth === l).map(p => h(p.png))).size;
   const perClassCount = {};
   for (const l of LABELS) perClassCount[l] = evalSet.filter(p => p.truth === l).length;
   lines.push(`distinct renders: scale=${SCALE} eval_slots=${evalSet.length} distinct_images=${uniqEval.size} per_class=${LABELS.map(l => l + ':' + perClass[l] + '/' + perClassCount[l]).join(',')}`);
+
+  // Band-ceiling probe: 24 magnitudes spanning the band, per class.
+  const PROBE_N = 24;
+  const ceiling = {};
+  for (const l of LABELS) {
+    if (l === 'clean') { ceiling[l] = 1; continue; }   // clean is one image by definition
+    const s = new Set();
+    for (let i = 0; i < PROBE_N; i++) {
+      const mag = EVAL_BAND[0] + (i / (PROBE_N - 1)) * (EVAL_BAND[1] - EVAL_BAND[0]);
+      s.add(h(await renderSpec(applyDefect(cleanSpec(), l, mag).spec, { scale: SCALE })));
+    }
+    ceiling[l] = s.size;
+  }
+  lines.push(`band ceiling (distinct images over ${PROBE_N} magnitudes): ${LABELS.map(l => l + ':' + ceiling[l] + '/' + PROBE_N).join(',')}`);
+
   const dupClasses = LABELS.filter(l => l !== 'clean' && perClassCount[l] > 1 && perClass[l] < perClassCount[l]);
-  // `clean` is exempt: every clean case is by definition the unmodified spec, so a
-  // single distinct image there is correct rather than collapsed.
-  if (dupClasses.length) lines.push(`WARNING: quantization is collapsing the band — non-clean classes lacking variety: ${dupClasses.join(',')}`);
+  // `clean` is exempt: every clean case is by definition the unmodified spec, so a single
+  // distinct image there is correct rather than collapsed.
+  const lowCeiling = LABELS.filter(l => l !== 'clean' && ceiling[l] < PROBE_N * 0.9);
+  if (dupClasses.length) lines.push(`WARNING: quantization is collapsing the split — classes lacking per-case variety: ${dupClasses.join(',')}`);
+  if (lowCeiling.length) lines.push(`WARNING: quantization is limiting the band — classes with a low ceiling: ${lowCeiling.map(l => `${l} (${ceiling[l]}/${PROBE_N})`).join(', ')}`);
   lines.push('');
 
   // Constant-predictor sanity: must never beat the least-frequent class share.

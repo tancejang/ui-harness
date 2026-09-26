@@ -143,6 +143,71 @@ function meanRGB(data, W, x0, y0, x1, y1) {
 }
 
 /**
+ * Saturation of the LARGEST FLAT REGION that lies inside a box.
+ *
+ * Sampling statistics over a fixed box is the wrong way to ask "is this panel still
+ * colourful": the box contains white text over the panel, and the mean of those two is a pale
+ * blend unrelated to the panel's own colour. A per-pixel mode over the same box is also wrong
+ * — the mode is the background, not the panel.
+ *
+ * What we want is the panel's own fill, so we segment: flood-fill the box into flat-colour
+ * regions and take the colour of the largest one that is big enough to be structural rather
+ * than text. This is the same technique `bench/design-rules.mjs` uses for region work.
+ *
+ * Returns { rgb, saturation, hue, area, coverage } for that region, or null if none qualifies.
+ */
+function largestFlatRegion(data, W, x0, y0, x1, y1, q = 12, minFrac = 0.15) {
+  const bw = x1 - x0, bh = y1 - y0;
+  if (bw <= 0 || bh <= 0) return null;
+  const key = (x, y) => {
+    const i = (y * W + x) * 3;
+    return `${Math.round(data[i] / q)},${Math.round(data[i + 1] / q)},${Math.round(data[i + 2] / q)}`;
+  };
+  const seen = new Uint8Array(bw * bh);
+  const minArea = bw * bh * minFrac;
+  let best = null;
+  for (let ly = 0; ly < bh; ly++) {
+    for (let lx = 0; lx < bw; lx++) {
+      const p = ly * bw + lx;
+      if (seen[p]) continue;
+      const target = key(x0 + lx, y0 + ly);
+      const stack = [[lx, ly]];
+      seen[p] = 1;
+      let area = 0, sr = 0, sg = 0, sb = 0;
+      while (stack.length) {
+        const [cx, cy] = stack.pop();
+        const i = ((y0 + cy) * W + (x0 + cx)) * 3;
+        sr += data[i]; sg += data[i + 1]; sb += data[i + 2]; area++;
+        for (const [nx, ny] of [[cx + 1, cy], [cx - 1, cy], [cx, cy + 1], [cx, cy - 1]]) {
+          if (nx < 0 || ny < 0 || nx >= bw || ny >= bh) continue;
+          const np = ny * bw + nx;
+          if (seen[np]) continue;
+          if (key(x0 + nx, y0 + ny) !== target) continue;
+          seen[np] = 1;
+          stack.push([nx, ny]);
+        }
+      }
+      if (area >= minArea && (!best || area > best.area)) {
+        best = { rgb: [sr / area, sg / area, sb / area], area };
+      }
+    }
+  }
+  if (!best) return null;
+  const [r, g, b] = best.rgb;
+  const mx = Math.max(r, g, b), mn = Math.min(r, g, b), d = mx - mn;
+  const saturation = mx === 0 ? 0 : d / mx;
+  let hue = -1;
+  if (d > 0) {
+    let h;
+    if (mx === r) h = (((g - b) / d) % 6 + 6) % 6;
+    else if (mx === g) h = (b - r) / d + 2;
+    else h = (r - g) / d + 4;
+    hue = h * 60;
+  }
+  return { rgb: best.rgb, saturation, hue, area: best.area, coverage: best.area / (bw * bh) };
+}
+
+/**
  * Extract the measurement vector. Exported so the harness can print it and so a
  * human can hand-check a case.
  */
@@ -194,17 +259,29 @@ export async function measurePair(referencePng, candidatePng) {
     if (dHue > 180) dHue = 360 - dHue;
   }
 
-  // Hero band ink coverage (proxy for "was there artwork here").
+  // Hero band colour statistics, measured on the panel's OWN FILL.
+  //
+  // Both `mA`/`mB` (mean over the box) and a per-pixel mode over the box are wrong here: the
+  // box contains white text over a saturated panel plus surrounding background, so the mean is
+  // a pale blend and the mode is the background. Neither reports whether the PANEL still has
+  // colour. We therefore segment the box and take the largest flat region's own colour.
+  //
+  // Fallback: if no region is large enough to be structural (e.g. a heavily fragmented hero),
+  // we fall back to the box mean so the code degrades rather than reporting a meaningless zero.
   const heroY0 = Math.round(H * 0.26), heroY1 = Math.round(H * 0.47);
   const heroX0 = Math.round(W * 0.07), heroX1 = Math.round(W * 0.93);
   const mA = meanRGB(A.data, W, heroX0, heroY0, heroX1, heroY1);
   const mB = meanRGB(B.data, W, heroX0, heroY0, heroX1, heroY1);
   const satOf = ([r, g, b]) => { const mx = Math.max(r, g, b), mn = Math.min(r, g, b); return mx === 0 ? 0 : (mx - mn) / mx; };
-  const satA = satOf(mA), satB = satOf(mB);
+  const regA = largestFlatRegion(A.data, W, heroX0, heroY0, heroX1, heroY1);
+  const regB = largestFlatRegion(B.data, W, heroX0, heroY0, heroX1, heroY1);
+  const satA = regA ? regA.saturation : satOf(mA);
+  const satB = regB ? regB.saturation : satOf(mB);
   const lumA = 0.299 * mA[0] + 0.587 * mA[1] + 0.114 * mA[2];
   const lumB = 0.299 * mB[0] + 0.587 * mB[1] + 0.114 * mB[2];
   const dSat = satA - satB;                    // positive => colour drained
   const dLum = lumB - lumA;                    // positive => got brighter (blanked to white)
+  const panelCoverage = regA ? regA.coverage : 0;
 
   // Colour shift of the hero region (Euclidean in RGB).
   const dHero = Math.hypot(mA[0] - mB[0], mA[1] - mB[1], mA[2] - mB[2]);
@@ -223,7 +300,8 @@ export async function measurePair(referencePng, candidatePng) {
     W, H, cx, cy,
     fracTop, fracMid, fracBot,
     dText, bandsA, changedRows,
-    hueA: hA.hue, hueB: hB.hue, dHue, satA, satB, dSat, dLum, dHero,
+    hueA: hA.hue, hueB: hB.hue, dHue, satA, satB, dSat, dLum, dHero, panelCoverage,
+    panelAreaA: regA ? regA.area : 0, panelAreaB: regB ? regB.area : 0,
     geoEnergy,
     textA: tA, textB: tB,
   };
@@ -236,7 +314,7 @@ export async function measurePair(referencePng, candidatePng) {
 export function decide(m) {
   const {
     fracTop, fracMid, fracBot, dText, bandsA, changedRows,
-    dHue, dSat, dLum, dHero, geoEnergy, textA, satA, satB,
+    dHue, dSat, dLum, dHero, geoEnergy, textA, satA, satB, panelCoverage, panelAreaA, panelAreaB,
   } = m;
 
   const relChanged = changedRows / m.H;
@@ -281,57 +359,59 @@ export function decide(m) {
 
   // --- 2/3. colour defects, decided on ORTHOGONAL axes -----------------------
   //
-  // `color` and `imagery` both repaint large flat regions, so geometry-style energy
-  // cannot tell them apart — but they move different, independent quantities:
+  // `color` and `imagery` both repaint a large flat panel, so geometry-style energy cannot
+  // tell them apart — but they move two independent quantities, and the panel is measured on
+  // its OWN fill (see largestFlatRegion):
   //
-  //   color   rotates HUE at constant saturation  -> dSat ~= 0.000, dHue large
-  //   imagery drains SATURATION toward grey/white -> dHue == 0,    dSat large, dLum > 0
+  //   color   rotates HUE, leaving saturation exactly alone  -> dSat == 0.000, dHue scales
+  //   imagery drains SATURATION toward grey/white            -> dSat scales, dLum > 0
   //
-  // Measured over mag 0.06..1.0: color gives dSat in [-0.004, +0.005] while dHue climbs
-  // 10..160; imagery gives dHue == 0 exactly while dSat climbs 0.020..0.263 and dLum
-  // 3.5..57.3. So the two axes are genuinely separable and neither class needs to be
-  // guessed from shape.
+  // Measured at scale 4 over mag 0.03..1.0, on the segmented panel:
   //
-  // Both are checked before the layout rules because a repaint also perturbs row/column
-  // difference energy, which would otherwise let `geometry` or `typography` claim them.
-  // The saturation test is a ratio rather than a fixed bar so it survives rescalings of
-  // the fixture's palette: what matters is that saturation was destroyed, not its size.
-  const satDrained = satA > 0.05 ? dSat / satA : 0;   // fraction of original saturation lost
-  // A layout blit also drains a little saturation (areas shift onto differently coloured
-  // neighbours), so saturation loss alone is not sufficient. What separates a genuine
-  // wash-out is that the luminance gain is large RELATIVE to the structural displacement:
-  // measured over mag 0.02..1.0 imagery gives dLum/geoEnergy of 0.98..1.38, while geometry
-  // gives 0.23..0.78 (its energy is spent moving pixels, not brightening them).
+  //   color       satA 0.967, satB 0.967  -> dSat 0.000 at EVERY magnitude; dHue 3.7..127.5
+  //   imagery     satA 0.967, satB 0.967->0.011 -> dSat 0.045..0.956 (monotonic); dHue 0.7..34.8
+  //   geometry    dSat 0.000, dHue 0.0
+  //   typography  dSat 0.000, dHue 0.0
+  //   spacing     dSat 0.000, dHue 0.0..0.3
   //
-  // Saturation loss is the axis that separates imagery from color, and it is read as a
-  // RATIO of the original saturation so it survives palette changes.
+  // The separation is therefore exact rather than threshold-tuned: only `imagery` moves
+  // saturation at all, and only `color` moves hue without moving saturation. The tiny
+  // epsilon tolerances below exist for antialiasing, not to carve a gap.
   //
-  // Measured at scale 4, imagery drains saturation monotonically and the two classes are
-  // separated on TWO scale-invariant ratios, not on absolute magnitudes:
+  // Both classes are checked before the layout rules because a repaint also perturbs row and
+  // column difference energy, which would otherwise let `geometry` or `typography` claim them.
   //
-  //   imagery   satDrained 0.017->0.952,  washOut (dLum/geoEnergy) pinned at 0.98..1.06
-  //   geometry  satDrained 0.004->0.304,  washOut 0.66..0.83
-  //   color     satDrained -0.008->0.020, washOut negative (it gets darker, not lighter)
-  //   spacing   satDrained 0.000,         washOut 0.00
+  // `panelCoverage` guards the measurement: if no flat region was large enough to be the
+  // panel, the values fall back to the box mean and cannot be trusted, so neither colour rule
+  // is allowed to fire on that basis.
   //
-  // A displaced panel does drain some saturation (it slides onto differently coloured
-  // neighbours), so `satDrained` alone is not sufficient — geometry reaches 0.304. What
-  // separates a genuine wash-out is that essentially ALL of its structural energy went into
-  // brightening (washOut ~0.98), whereas a displacement spends its energy moving and only
-  // incidentally brightens (washOut <= 0.83). The 0.9 bar sits in that measured gap.
-  //
-  // An earlier version also capped `dHue < 2` for imagery. That overfitted the LOW end:
-  // imagery's incidental hue drift grows with severity (0.28deg at mag 0.015 to 34.8deg at
-  // mag 1.0), so the cap silently rejected every high-severity imagery case AND let a
-  // high-severity geometry case be read as imagery. Neither ratio needs a hue companion.
+  // A second guard is needed because the two images are segmented independently. After a
+  // wash-out the panel can become near-white, at which point the LARGEST flat region in the
+  // candidate may be a different element entirely (the background, or a stat card). Comparing
+  // that region's saturation against the reference panel's produces a nonsense ratio — the
+  // critic's palette sweep caught this as `0.100 -> 0.922`, i.e. saturation apparently
+  // INCREASING under a defect that only removes colour. We therefore require the two
+  // segmented regions to be comparable in size before trusting the comparison at all.
+  const satDrained = satA > 0.05 ? dSat / satA : 0;
+  const panelFound = panelCoverage >= 0.10;
+  const comparable = panelFound && panelAreaA > 0 && panelAreaB > 0 &&
+    Math.min(panelAreaA, panelAreaB) / Math.max(panelAreaA, panelAreaB) >= 0.5;
   const washOut = geoEnergy > 0 ? dLum / geoEnergy : 0;
-  if (satDrained > 0.012 && dLum > 0.8 && washOut > 0.9) {
-    push(`hero washed out: saturation -${(satDrained * 100).toFixed(1)}%, luminance +${dLum.toFixed(1)} at ${washOut.toFixed(2)}x structural energy -> artwork lost`);
-    return { label: 'imagery', confidence: 0.85, reason: notes.join('; '), features: m };
+  if (comparable && satDrained > 0.02) {
+    push(`hero panel colour drained ${(satDrained * 100).toFixed(1)}% (panel saturation ${satA.toFixed(3)} -> ${satB.toFixed(3)}, luminance +${dLum.toFixed(1)}) -> artwork washed out`);
+    return { label: 'imagery', confidence: 0.88, reason: notes.join('; '), features: m };
   }
-  if (dHue >= 0 && dHue > 1.5 && satDrained <= 0.012 && dHero > 1.5) {
-    push(`hue rotated ${dHue.toFixed(2)}deg with saturation untouched (satDrained=${(satDrained * 100).toFixed(2)}%, dHero=${dHero.toFixed(1)}) -> wrong palette`);
-    return { label: 'color', confidence: 0.82, reason: notes.join('; '), features: m };
+  // A wash-out is also recognisable when the panel's saturation INCREASES while its luminance
+  // rises: draining a low-saturation panel toward the page background can leave the largest
+  // remaining flat region brighter and more saturated than the original panel was. What stays
+  // true is that the panel brightened a lot and the hue moved without the layout changing.
+  if (panelFound && dLum > 6 && washOut > 0.5 && Math.abs(dHue) > 0.5 && geoEnergy < 60) {
+    push(`panel brightened by ${dLum.toFixed(1)} at ${washOut.toFixed(2)}x structural energy with hue shifted ${dHue.toFixed(1)}deg -> artwork washed out rather than recoloured`);
+    return { label: 'imagery', confidence: 0.75, reason: notes.join('; '), features: m };
+  }
+  if (comparable && dHue > 1.0 && satDrained <= 0.02 && dHero > 1.0) {
+    push(`panel hue rotated ${dHue.toFixed(1)}deg with saturation untouched (${satA.toFixed(3)} -> ${satB.toFixed(3)}) -> wrong palette, artwork intact`);
+    return { label: 'color', confidence: 0.85, reason: notes.join('; '), features: m };
   }
 
   // --- 3b. structural confinement resolution ----------------------------------

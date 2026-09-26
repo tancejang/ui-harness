@@ -62,8 +62,12 @@ for (const c of CLASSES) {
 
 // A sweep mean of 1.0000 with no per-class failures means this band is SATURATED: it can no
 // longer distinguish a better judge from the current one, so it cannot drive improvement.
-// That is a finding, not a failure — it means the band must move down (see bench/README.md).
+//
+// This exits NON-ZERO. The whole point of the message is that the band must be re-derived
+// before its score means anything, so a green build here would be a lie — an earlier version
+// ended with `process.exitCode = saturated ? 0 : 0`, which made the check a no-op and let CI
+// pass on a band with no gradient left.
 const saturated = mean === 1 && weak.length === 0;
 console.log(`\nband status: ${saturated ? 'SATURATED — re-derive the band with bench/difficulty.mjs before using it as an improvement signal' : 'has headroom (weak classes: ' + weak.join(', ') + ')'}`);
-process.exitCode = saturated ? 0 : 0;
+process.exitCode = saturated ? 3 : 0;
 
