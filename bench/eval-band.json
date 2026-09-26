@@ -1,6 +1,11 @@
 {
-  "_comment": "Held-out eval difficulty band for the UI defect benchmark, as [min, max] defect magnitude. Read by run.mjs, seed-sweep.mjs and difficulty.mjs so they cannot drift apart. Re-derive with `node bench/difficulty.mjs` whenever this band becomes saturated (sweep mean 1.0000 with 0 per-class failures) — a saturated band cannot drive improvement. History: [0.06,0.11] was the first band; it was solved to 30/30 perfect seeds (720 cases, 0 failures), so the band moved to [0.03,0.06], where typography measurably breaks.",
-  "band": [0.03, 0.06],
+  "_comment": "Held-out eval difficulty band for the UI defect benchmark, as [min, max] defect magnitude. Read by run.mjs, seed-sweep.mjs and difficulty.mjs so they cannot drift apart. Re-derive with `node bench/difficulty.mjs` whenever this band becomes saturated (seed-sweep reports SATURATED: sweep mean 1.0000 with 0 per-class failures) - a saturated band cannot distinguish a better judge from the current one, so it cannot drive improvement.",
+  "_history": [
+    "[0.06, 0.11] - first band after de-quantization. Solved to 30/30 perfect seeds (720 cases, 0 failures), so retired.",
+    "[0.03, 0.06] - chosen where typography scored 4/5 and everything else 5/5. Also solved to saturation, so retired.",
+    "[0.010, 0.020] - current. Chosen after the clean-gate and confinement fixes lowered every detection floor; typography is now the sole weak class, scoring 3/5 at 0.015 and 0/5 at 0.010."
+  ],
+  "band": [0.010, 0.020],
   "trainBand": [0.75, 1.0],
   "casesPerClass": 4,
   "sweepSeeds": 12
