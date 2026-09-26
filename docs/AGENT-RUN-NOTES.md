@@ -463,21 +463,63 @@ actually improved was the benchmark and the fixture. Corrected here.
 
 ---
 
+## Cycle 10 — measure the taught rules that can be measured (`8546e65`)
+
+The user's follow-up was that **all** the knowledge should apply to a real run, and "all" was the
+operative word. Coverage was lopsided: the skill taught 32 rules, only **7** had a measurement.
+The other 25 reached the model as advice with no evidence — taught but never checked.
+
+### Coverage now
+| | count | rules |
+|---|---|---|
+| previously measured | 7 | SP-2, SP-1, SP-5, CO-6, CO-2, CO-5, LV-5 |
+| **newly measured** | **8** | TY-1, TY-6, HI-1, HI-2, CO-4, DE-1, FI-5, HI-3 |
+| prompt-only, documented | 17 | TY-2/3/4/5/8/9/10, SP-3/4/6, HI-4/5, CO-7, DE-3, IM-2/3, FI-4 |
+
+`bench/design-rules-extended.mjs` implements the new measurements from pixels. `PROMPT_ONLY_RULES`
+lists the rest **with the reason each cannot be judged from a screenshot** — `em` units and font
+availability live in source, line length needs the text content, asset intended size is a source
+fact, empty states are scenarios. **A test asserts every taught rule is in one list or the other**,
+so nothing can fall silently into the gap between "the model was told" and "we actually check".
+
+### Four measurement bugs found while wiring — three produced false findings
+| rule | what it claimed | why it was wrong | fix |
+|---|---|---|---|
+| HI-3 | white text is "grey text on colour" — 347 hits | white has saturation 0, and white-on-colour is the book's *recommendation* | judge mid-tone grey only (L 0.30–0.88), exclude whiteish |
+| CO-4 | the fixture's green ramp collapses to 34% saturation | it sampled every pixel, so the "light greens" were **antialiasing blends** against the white page at L 97% — there is no light-green palette colour on that screen | sample **plateau** colours only (whole 3×3 neighbourhood matching); now reports UNVERIFIED |
+| HI-2 | hierarchy uses size alone | edge density conflates size with weight — a large thin glyph and a small bold one carry similar counts | measure **mean stroke thickness** relative to glyph height, plus ink colour |
+| — | `unverified` could not name the rule | it was a bare count, and `design-findings.mjs` looked for `ok === null` inside `findings`, where unverified rules are never pushed | return `unverifiedIds` |
+
+All four are the same failure mode: **a confident verdict from absent or misread evidence**. Each
+now either measures correctly or declines to judge, and each has a pinned regression test.
+
+### Also corrected
+An earlier draft of the same commit message claimed "21 of 29". The real figures are **15 measured
+and 17 prompt-only against a 32-rule total**. The code was unchanged; the claim was amended rather
+than left standing, because an overstated coverage number is exactly the error this work exists to
+catch.
+
+**130 tests pass** (was 127). Demo, all five controls, and the design-findings smoke all exit 0.
+
+---
+
 ## Consolidated state
 
-- **16 commits pushed to `main`**; local HEAD == `origin/main` at every checkpoint.
-- 9 recorded cycles in `.uih/agent/`, rendered into `.uih/agent/progress.html`.
-- `npm test`: **127 passing** (was 95 at the start).
-- **Runtime path** (`src/`, `plugins/`, `skills/`) is now connected to the knowledge base.
-- Every score line carries all five required values; baseline sanity is asserted, not assumed.
+- **17 commits pushed to `main`**; local HEAD == `origin/main` at every checkpoint.
+- 10 recorded cycles in `.uih/agent/`, rendered into `.uih/agent/progress.html`.
+- `npm test`: **130 passing** (was 95 at the start).
+- Runtime path (`src/`, `plugins/`, `skills/`) is connected to the knowledge base.
+- Measured design coverage: **15 of 32 taught rules**, the other 17 documented as prompt-only.
 
 ### What still does NOT hold
 - **No end-to-end quality measurement exists.** Nothing has compared UIH output against a baseline
-  on a real app. The design rules now reach the reviewer, but whether that produces *better UI*
-  is unmeasured. `docs/BENCHMARK.md`'s original plan — blind human comparison against the Codex
-  app on a real screen — remains unexecuted and is the only thing that would answer it.
+  on a real app. The rules now reach the reviewer, but whether that produces *better UI* is
+  unmeasured. `docs/BENCHMARK.md`'s original plan — blind human comparison against the Codex app on
+  a real screen — remains the only thing that would answer it. The user intends to find this out by
+  running UIH themselves.
 - The benchmark still measures six synthetic defect classes on one fixture layout.
-- ~250 of the 284 extracted figures remain uninterpreted.
+- ~250 of the 284 extracted figures remain uninterpreted; the shadow recipe (pp.185–187) and
+  elevation system (pp.181–182) are the obvious next candidates for measurement.
 
 ---
 
