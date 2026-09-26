@@ -53,31 +53,47 @@ and `seed-sweep.mjs`. They used to carry independent copies and silently drifted
 
 A band that scores 1.0000 cannot distinguish a better judge from the current one, so it stops
 being an improvement signal. Whenever that happens the band is lowered to wherever the judge
-actually fails, using `difficulty.mjs`. This has already happened once:
+actually fails, using `difficulty.mjs`. This has happened three times:
 
 | Band | Outcome |
 |---|---|
-| `[0.06, 0.11]` | Original. Solved to **30/30 perfect seeds, 720 cases, 0 failures**, so it saturated and the band moved down. |
-| `[0.03, 0.06]` | Current. Chosen because at mag 0.03 typography scored 4/5 while everything else was 5/5, and at 0.025 typography was 0/5. |
+| `[0.06, 0.11]` | First band after de-quantization. Solved to **30/30 perfect seeds, 720 cases, 0 failures** → retired. |
+| `[0.03, 0.06]` | Second. Chosen where typography scored 4/5. Also solved to saturation → retired. |
+| `[0.01, 0.02]` | **Current.** Chosen after the clean-gate and confinement fixes lowered every detection floor. Typography is the sole weak class (50% failure). |
 
-`seed-sweep.mjs` prints `SATURATED` when a band is solved rather than quietly reporting a
-perfect score as if it were informative.
+`seed-sweep.mjs` prints `SATURATED` and **exits 3** when a band is solved, rather than quietly
+reporting a perfect score as though it were informative. On the current band it reports
+`has headroom (weak classes: typography)`.
+
+### Detection floors
+
+The judge detects each defect down to these magnitudes (measured, `difficulty.mjs`):
+
+| class | floor | equivalent displacement |
+|---|---|---|
+| geometry | 0.005 | 0.09 px |
+| spacing | 0.005 | 0.07 px |
+| imagery | 0.005 | — |
+| color | 0.008 | — |
+| typography | 0.015 | sub-pixel glyph change |
+| clean | correct at every magnitude | — |
+
+Below its floor a class reads as `clean`, which is the honest answer for an invisible edit; it
+is never reported as a *different* defect class.
 
 ### Current difficulty map
 
-`difficulty.mjs` sweeps magnitude and reports per-class accuracy. As of the current judge:
-
 ```
 mag     geometry   typography  spacing    color      imagery    clean
-0.06    5/5        5/5         5/5        5/5        5/5        ok
-0.04    5/5        5/5         5/5        5/5        5/5        ok
-0.03    5/5        4/5         5/5        5/5        5/5        ok
-0.025   5/5        0/5         5/5        5/5        5/5        ok
-0.015   5/5        0/5         5/5        5/5        3/5        ok
-0.01    1/5        0/5         0/5        0/5        0/5        ok
+0.030   5/5        5/5         5/5        5/5        5/5        ok
+0.020   5/5        5/5         5/5        5/5        5/5        ok
+0.015   5/5        3/5         5/5        5/5        5/5        ok
+0.010   5/5        0/5         5/5        5/5        5/5        ok
+0.005   5/5        0/5         5/5        0/5        5/5        ok
 ```
 
-`typography` is the earliest class to break, which is why the current band starts at 0.03.
+`typography` is the earliest class to break, which is why the current band starts at 0.010.
+
 
 ## Running it
 
@@ -129,13 +145,36 @@ Measured against the benchmark fixture, the reference screen itself **fails two 
 
 ## Known limitations
 
+These are the findings a critic raised that are **not** yet fixed, plus the structural limits of
+the approach. They are listed so nobody mistakes a passing score for more than it is.
+
+### Adversarial cases the judge gets wrong (found by a critic, still open)
+- If the hero panel **starts pale** (`#f8fafc`), the wash-out is a no-op and `imagery` is
+  undetectable at every magnitude. Reachable in-band.
+- Washing out the **stat cards** instead of the hero reads as `clean`.
+- A hero rendered as a **gradient** (realistic artwork) is ambiguous; it falls to a fallback.
+- **Combined defects** (geometry + color, geometry + typography) collapse to a single class. The
+  task declares exactly one class per case, so multi-defect screens are unhandled by design —
+  but real screens have them.
+- A **grey or near-white hero** makes saturation-based detection impossible in principle.
+  `verify-palette.mjs` measures this: 177/200 across eight accent colours, with the residue
+  concentrated exactly in the degenerate grey cases.
+
+### Structural limits
 - The fixture is synthetic SVG geometry, not real application screenshots. It exercises the
   *measurement* logic honestly, but it is **not** evidence about real rendered app UI.
-- One fixture layout, six coarse defect classes. A real screen introduces overlapping defects,
-  photography, gradients, and text of varying length — none of which this covers.
+- One fixture layout (480×720 dashboard). Nothing here generalises across layouts.
+- No photography, no blur/shadow, no real font rasterisation, no text of varying length.
 - The judge is a hand-written decision tree, not a learned model. It is auditable, which is the
-  point at this stage, but it will not generalise to arbitrary UIs.
-- The eval band is currently saturated (30/30 seeds). It is retained as a *regression gate*,
-  not as an improvement signal, until it is moved down again.
+  point at this stage, but it will not generalise to arbitrary UIs. Its constants are documented
+  with the measurements that justify them; the critic showed two of them (`satA > 0.05` and
+  `churnRatio > 50`) were originally band- or palette-fitted, and both have since been replaced.
 - `clean` legitimately renders one distinct image, so the distinct-render gate exempts it.
+
+### What the score does and does not mean
+A score of 0.9167 on the current band means the classifier resolves six synthetic defect classes
+at sub-pixel magnitudes on one fixture layout. It does **not** mean ui-harness produces better UI,
+and it does not measure design quality at all — the defect classes are *detection* categories,
+not quality grades. See [DESIGN-RUBRIC.md](../docs/DESIGN-RUBRIC.md) for the mapping between them.
+
 
