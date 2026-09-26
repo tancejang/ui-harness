@@ -210,3 +210,85 @@ it stops being an improvement signal. Per the brief's own logic, the band moved 
 4. No unit tests yet cover `bench/judge.mjs` or `bench/fixture.mjs` — the judge is exercised only
    through the benchmark and controls.
 5. Nothing has been ported from `agentic-awesome-skills` yet.
+
+---
+
+## Cycle 3 — direct unit coverage (pushed as `97abc28`)
+
+Added `test/bench-unit.test.mjs`: **95 → 114 tests**. The judge and fixture had been exercised
+only indirectly, through the benchmark and its controls. The new tests pin behaviour *and* the
+three bugs that had already shipped:
+
+- the eval band must render ≥10 distinct images per class (the original quantization defect);
+- `rotateHue` must survive a full hue sweep (it threw on float error at a segment boundary);
+- the hue estimate must resolve sub-10° rotation (the histogram-mode version quantized it to 0).
+
+Plus: fixture determinism, `clone` independence, supersample scaling, `applyDefect` determinism,
+identical renders → `clean`, `classify` purity, size-mismatch rejection, per-class correctness
+across the whole eval band, and 12 hand-derived design-rule assertions (WCAG contrast 5.17 /
+3.77 / 4.39 all matched exactly).
+
+## Cycle 4 — paint quantization via composited opacity (pushed as `b0a1dff`)
+
+A **third** fresh-context critic (agent `3546bfd5`) found the original defect surviving by a new
+route, and found three more issues besides. Its report is the most valuable artifact of the run.
+
+### Defect 1 — 8-bit colour quantization (the big one)
+Mixed colours were rounded to hex, so across the whole eval band `color` produced only **15
+distinct images** and `imagery` **16**, *invariant to `RENDER_SCALE`* — the loss happened in
+colour space, not pixels, so supersampling could never fix it. `run.mjs`'s gate stayed silent
+because a per-class check (`4/4`) is trivially satisfiable when the ceiling is 15.
+
+Pinned the root cause by experiment (20 fine-grained samples):
+
+| mechanism | distinct renders |
+|---|---|
+| fractional `rgb()` channel | 3/20 |
+| integer `rgb()` channel | 3/20 |
+| **`fill-opacity` over a solid fill** | **14/20 ← the only one that works** |
+| gradient stop with float rgb | 2/20 |
+
+sharp's SVG rasterizer rounds colour channels but evaluates alpha compositing at higher
+precision. Paint defects now carry severity as **composited opacity**: `imagery` is a pale
+overlay whose opacity *is* the severity; `color` is a hue-rotation ladder with the sub-step
+carried by a fractional-opacity overlay.
+
+**Result: every class now renders 24/24 distinct images across the band.** An independent sweep
+agrees — `color` 15 → 76/80, `imagery` 14 → 60/80. `TRAIN` also rose 0.8750 → 1.0000.
+
+### Defect 2 — hero saturation measured on the wrong statistic
+`satA > 0.05` was a hard palette-fitted cliff: a purple accent made `color` read as geometry;
+grey/stone accents made `imagery` always read as geometry. The fixture sat 5.5× above the gate,
+so the fragility was invisible in-band.
+
+Fixed by measuring the **largest flat region's own fill** (flood-fill segmentation) instead of
+the mean colour of a box. Averaging white text over a saturated panel gives a pale blend
+unrelated to the panel's colour, and a per-pixel mode picks the background — both wrong. Palette
+sweep went **167 → 177/200**. The residue is the genuinely degenerate grey/near-white hero, where
+a saturation-based rule cannot apply *in principle*; that is recorded as a real limitation.
+
+### Defect 3 — `seed-sweep.mjs` exit code was a no-op
+It ended with `process.exitCode = saturated ? 0 : 0` — both branches zero, so a spent band kept
+CI green. Now exits **3** on SATURATED.
+
+### Defect 4 — the regression test was too weak
+It sampled 12 points with a `>= 10` bar, which the *quantized* implementation passed at 12/12
+while its true ceiling was 15. Now samples **48** points and demands **90% unique**, and a
+separate test pins the compositing mechanism.
+
+### Also added
+`run.mjs` now probes a **band ceiling** (24 magnitudes per class) beside the per-class count,
+because the per-class count alone cannot detect a low ceiling — exactly how defect 1 hid.
+
+### Process note
+The critic left debris at the repo root (`_critic_5cf/`, `_critic_head_out.txt`,
+`_critic_head_verify.mjs`) and reported that HEAD had moved under it mid-audit. It re-verified
+against a pristine `git worktree`, which is the right instinct. Debris was removed.
+
+### Still not addressed from that critic's report
+- `churnRatio > 50` is **not** in a gap outside the eval band: geometry's own ratio exceeds 50
+  at mag ≤ 0.012, peaking at 75.1. The comment claiming "geometry 24.0..45.0" is false there.
+- Adversarial cases: a hero that starts pale makes `imagery` undetectable; washing out the stat
+  cards instead of the hero reads as `clean`; combined defects collapse to one class.
+- The benchmark still measures synthetic SVG rectangles on one fixture layout, with no real
+  screenshots, gradients, photography, or multi-defect cases.
