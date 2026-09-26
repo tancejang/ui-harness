@@ -353,10 +353,82 @@ a threshold without breaking the saturated cases. Documented as such. `verify-pa
 
 ## Consolidated state
 
-- **13 commits pushed to `main`**; local HEAD == `origin/main` at every checkpoint.
-- 6 recorded cycles in `.uih/agent/`, each with before/after scores and a critic verdict, rendered
+- **14 commits pushed to `main`**; local HEAD == `origin/main` at every checkpoint.
+- 7 recorded cycles in `.uih/agent/`, each with before/after scores and a critic verdict, rendered
   into `.uih/agent/progress.html`.
-- Current benchmark: TRAIN 1.0000, **EVAL 0.9167** (12-seed sweep mean), constant 0.1667,
-  random 0.0833, 6 classes × 4 cases per split, band ceiling 24/24 distinct images per class.
-- `npm test`: **117 passing** (was 95 at the start).
+- `npm test`: **120 passing** (was 95 at the start).
 - Every score line carries all five required values; baseline sanity is asserted, not assumed.
+
+---
+
+## Cycle 7 — critic-4, the most valuable review of the run (`d8f688f`, `c7409d4`)
+
+Critic-4 found four defects. All four were reproduced before acting, and one of them
+**falsified a claim I had just committed**.
+
+### 1. The typography cliff — and my false claim about it
+I committed `verify-gradient.mjs` with the conclusion *"4 distinct accuracy values → a real
+gradient, not a cliff"*, and repeated that in the commit message. **Both were wrong.**
+
+At 0.00025 resolution, typography transitions in a **single step**: `changedRows` jumps 12 → 25
+and the transition width is 0.00025 magnitude units.
+
+It is **not** the threshold. I replaced the binary `changedRows >= 24` gate with a continuous
+comparative predicate (`changedRows > 22 × geoEnergy`) and **the cliff survived unchanged**. The
+cause is **glyph hinting**: the spec's font size is continuous (25.89 → 25.88) while the rendered
+glyph grid is not, so crossing a pixel boundary re-snaps every occupied row. Only two such
+discontinuities exist across 0.005–0.030.
+
+Consequence, measured: every band giving an intermediate typography score straddles the cliff.
+
+| band | typography |
+|---|---|
+| `[0.0100, 0.0145]` | 0/5 (degenerate) |
+| `[0.0150, 0.0195]` | 5/5 (saturated) |
+| `[0.0140, 0.0175]` | 4/5 (step) |
+| `[0.0125, 0.0165]` | 2/5 (step) |
+
+So my "0.9167 with a real gradient" was a step-function artefact. The band is now placed **above**
+the cliff and reported as a **regression gate**, not a capability gradient. Full diagnosis and a
+suggested escape are in `docs/STALL-LOG.md`.
+
+### 2. Control C4 could not fail — and fixing it found a real bug
+C4 asserted `label === 'clean' || geoEnergy < 12`. The second clause holds for essentially every
+low-magnitude verdict, so it printed a defect label and still reported **PASS**. The escape hatch
+is deleted; C4 now sweeps three jitter magnitudes asserting `clean`.
+
+It **immediately failed**, exposing a genuine bug: a 1px or 2px hero jitter gave `changedRows = 0`
+but `geoEnergy` 0.296/0.592 with `fracMid` 1.000, so the confinement rule reported a sub-threshold
+jitter as confident `geometry`. Fixed by requiring `changedRows > 0` for confinement — a rigid
+displacement necessarily changes rows.
+
+### 3. Two fixes had no test that fails on revert
+Reverting the clean gate left **22/22 tests passing**, despite that revert swallowing **100% of
+typography cases**. Added three **REVERT-DETECTING** tests: the clean gate, the text-churn
+precondition, and the C4 property.
+
+### 4. Stale hard-coded bands, and a verifier that lied
+`verify-independent.mjs` pinned the **retired** band `[0.03, 0.06]`, printed
+`"agreement with bench/run.mjs headline: both say 1.0000"` while `run.mjs` actually said 0.9167,
+and exited **0** while reporting its own gate as FAILED. A verification tool that can disagree
+with reality and still pass is worse than no tool.
+
+It now reads `eval-band.json`, **actually runs `run.mjs`** to compare, reports
+consistent/disagreement with a delta, and exits non-zero when the instrument is unsound. Its
+agreement claim is now genuine: `independent=1.0000 run.mjs=1.0000 delta=0.0000`. Same staleness
+fixed in two unit tests and `difficulty.mjs` — all four now read the one config file.
+
+### Also fixed
+`imagery` render resolution was 33/80 at fine sampling because its opacity span was only 0.036 of
+the range; the gain is raised so the band spans ~0.19, giving 80/80.
+
+### Verifier exit codes (all intentional)
+| script | exit | meaning |
+|---|---|---|
+| `run.mjs` | 0 | benchmark healthy |
+| `controls.mjs` | 0 | all five controls pass |
+| `verify-independent.mjs` | 0 | agrees with run.mjs, no quantization collapse |
+| `design-rules-smoke.mjs` | 0 | all rubric measurements incl. hand-derived checks |
+| `verify-imagery-pale.mjs` | 0 | blind spot confirmed confined to near-neutral panels |
+| `verify-palette.mjs` | **1** | honestly reports 21/200 grey-panel failures — the documented limitation |
+| `seed-sweep.mjs` | **3** | band SATURATED, i.e. a regression gate rather than a gradient |
