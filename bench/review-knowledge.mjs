@@ -95,12 +95,19 @@ export const REVIEW_RULES = [
     source: 'prose',
     measure: ({ png }) => {
       if (!png) return null;
-      return textContrast(png).then(c => ({
-        ok: c.p05 >= 4.5,
-        detail: `text contrast p05=${c.p05.toFixed(2)}:1, p50=${c.p50.toFixed(2)}:1 (WCAG body text needs 4.5)`,
-        evidence: [`p05 ${c.p05.toFixed(2)}`, `p50 ${c.p50.toFixed(2)}`, `n=${c.n}`],
-        suggestion: c.p05 >= 4.5 ? null : 'darken the lowest-contrast text or lighten its backdrop',
-      }));
+      return textContrast(png).then(c => {
+        // With no measurable text edges the rule is UNVERIFIABLE, not failing. Reporting
+        // "p05 = 0.00" as a violation would be inventing a verdict from absent data — the exact
+        // failure mode the reviewer prompt warns against. Seen on a flat-colour capture with no
+        // text at all.
+        if (c.n < 50) return null;
+        return {
+          ok: c.p05 >= 4.5,
+          detail: `text contrast p05=${c.p05.toFixed(2)}:1, p50=${c.p50.toFixed(2)}:1 over ${c.n} edges (WCAG body text needs 4.5)`,
+          evidence: [`p05 ${c.p05.toFixed(2)}`, `p50 ${c.p50.toFixed(2)}`, `n=${c.n}`],
+          suggestion: c.p05 >= 4.5 ? null : 'darken the lowest-contrast text or lighten its backdrop',
+        };
+      });
     },
   },
   {
@@ -110,12 +117,17 @@ export const REVIEW_RULES = [
     source: 'prose',
     measure: ({ png }) => {
       if (!png) return null;
-      return greyRampCount(png).then(n => ({
-        ok: n >= 5,
-        detail: `${n} distinct near-neutral luminance levels (the book asks for at least 5)`,
-        evidence: [`grey levels: ${n}`],
-        suggestion: n >= 5 ? null : 'add intermediate greys; a two-step ramp cannot express hierarchy',
-      }));
+      return greyRampCount(png).then(n => {
+        // A single-colour capture has no ramp to judge. Reporting it as a palette failure would
+        // again be a verdict from absent data.
+        if (n === 0) return null;
+        return {
+          ok: n >= 5,
+          detail: `${n} distinct near-neutral luminance levels (the book asks for at least 5)`,
+          evidence: [`grey levels: ${n}`],
+          suggestion: n >= 5 ? null : 'add intermediate greys; a two-step ramp cannot express hierarchy',
+        };
+      });
     },
   },
   {
@@ -164,6 +176,7 @@ export async function reviewScreen(png, { scale = 1, gaps } = {}) {
   const measuredGaps = gaps ?? await verticalGaps(png, scale);
   const ctx = { png, scale, gaps: measuredGaps };
   const findings = [];
+  const unverifiedIds = [];
   let unverified = 0;
 
   for (const rule of REVIEW_RULES) {
@@ -173,7 +186,15 @@ export async function reviewScreen(png, { scale = 1, gaps } = {}) {
     } catch (e) {
       res = { ok: null, detail: `measurement failed: ${e.message}`, evidence: [] };
     }
-    if (!res || res.ok === null) { unverified++; continue; }
+    // A rule returning null, or a measure that threw, is UNVERIFIED — recorded by id so the
+    // reviewer can mark it unverified rather than assume it passed, and never counted as a
+    // failure. The ids matter: `unverified` used to be a bare count, so the caller could not
+    // tell WHICH rule was unjudgeable.
+    if (!res || res.ok === null) {
+      unverified++;
+      unverifiedIds.push(rule.id);
+      continue;
+    }
     findings.push({ id: rule.id, page: rule.page, statement: rule.statement, source: rule.source, ...res });
   }
 
@@ -184,9 +205,10 @@ export async function reviewScreen(png, { scale = 1, gaps } = {}) {
     findings,
     failed,
     unverified,
+    unverifiedIds,
     summary: failed.length === 0
-      ? `all ${findings.length} reviewable rules pass (${unverified} could not be judged from this render)`
-      : `${failed.length} of ${findings.length} reviewable rules fail: ${failed.map(f => f.id).join(', ')}`,
+      ? `all ${findings.length} reviewable rules pass${unverified ? `, ${unverified} could not be judged from this render (${unverifiedIds.join(', ')})` : ''}`
+      : `${failed.length} of ${findings.length} reviewable rules fail: ${failed.map(f => f.id).join(', ')}${unverified ? `; ${unverified} could not be judged (${unverifiedIds.join(', ')})` : ''}`,
   };
 }
 

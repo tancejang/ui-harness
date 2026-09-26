@@ -11,6 +11,7 @@ import { accepted, meets, validateEvaluation, validatePlan, validateImage, decod
 import { exists, git, hash, inside, json, writeJSON } from './util.mjs';
 import {nextScope} from './scheduling.mjs';
 import {aggregateJudgments} from './evaluation.mjs';
+import {designFindingsFor, scaleFromCapture} from '../bench/design-findings.mjs';
 
 export class BudgetStop extends Error {}
 export class Session {
@@ -86,7 +87,21 @@ export class Session {
     if (previous) images.previous = await imageInput(previous);
     const capture=await json(actual.replace(/\.png$/,'.capture.json'));
     const measurements=measure(this.state.visualChecks??[],capture,this.state.config.scenario);
-    const request={project:await inspect(this.state.workspace,this.state.config),nativeEvidence:capture,measurements,visualChecks:this.state.visualChecks??[],issues:this.state.issues??[],functionalChecks:this.lastChecks??null, images, component: component ?? null, scope: component ? 'component' : 'screen', requirements: this.state.config.scenario.description };
+    // Sourced design rules measured from the rendered candidate.
+    //
+    // These ride along with every critic and judge call so the reviewer cites specific thresholds
+    // (SP-2's spacing scale, CO-6's 4.5:1) instead of taste. The measurement is deterministic and
+    // local: it reads the PNG we are already sending. It never throws into the run - a checker
+    // failure degrades to a note, because a design measurement should not break refinement.
+    //
+    // The prompt tells the reviewer to treat these as evidence to investigate, not
+    // unquestionable truth, so a wrong measurement cannot silently drive an acceptance decision.
+    const designFindings = await designFindingsFor({
+      imagePath: actual,
+      scale: scaleFromCapture(capture, this.state.config.scenario),
+      scenario: this.state.config.scenario
+    });
+    const request={project:await inspect(this.state.workspace,this.state.config),nativeEvidence:capture,measurements,visualChecks:this.state.visualChecks??[],issues:this.state.issues??[],functionalChecks:this.lastChecks??null, designFindings, images, component: component ?? null, scope: component ? 'component' : 'screen', requirements: this.state.config.scenario.description };
     const result = await this.call(role, role, request);
     if (role === 'critic') {
       if (!Array.isArray(result.findings) || result.findings.some(f => typeof f !== 'string')) throw new Error('Critic must return findings');
