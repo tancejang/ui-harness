@@ -79,8 +79,19 @@ export function cleanSpec(W = 480, H = 720) {
   return { W, H, prims };
 }
 
-/** Rasterize a spec to a PNG buffer. */
-export async function renderSpec(spec) {
+/**
+ * Rasterize a spec to a PNG buffer.
+ *
+ * `scale` renders the SVG at `scale`x the logical canvas size. This exists to defeat
+ * coordinate quantization: the perturbations move panels by fractional logical pixels
+ * (e.g. 18 * 0.06 = 1.08), and rasterizing 1:1 would collapse every magnitude in a band
+ * into the same handful of integer offsets, so distinct test cases would render to
+ * byte-identical images. At scale 4 a 0.06-magnitude displacement is a real ~4px shift.
+ *
+ * The returned PNG is scale x larger than the logical canvas. Callers that compare two
+ * images must use the same scale; the judge only ever compares like with like.
+ */
+export async function renderSpec(spec, { scale = 1 } = {}) {
   const parts = [rect(0, 0, spec.W, spec.H, PALETTE.bg)];
   for (const p of spec.prims) {
     const [x, y, w, h] = p.box;
@@ -95,9 +106,13 @@ export async function renderSpec(spec) {
       parts.push(text(tx, ty, p.size, p.fill, p.text, anchor, p.weight ?? 400));
     }
   }
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${spec.W}" height="${spec.H}" viewBox="0 0 ${spec.W} ${spec.H}">${parts.join('')}</svg>`;
+  const W = Math.round(spec.W * scale), H = Math.round(spec.H * scale);
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${spec.W} ${spec.H}">${parts.join('')}</svg>`;
   return sharp(Buffer.from(svg)).png().toBuffer();
 }
+
+/** Default supersample factor for benchmark rendering. */
+export const RENDER_SCALE = 4;
 
 // ---------------------------------------------------------------------------
 // Perturbations. Each returns {spec, label} where label is the held-out truth.
@@ -117,60 +132,96 @@ function find(spec, kind) {
 const shift = (p, dx, dy) => { p.box[0] += dx; p.box[1] += dy; };
 
 /**
- * geometry defect: a whole panel is mispositioned / resized by a large amount.
- * Chosen magnitude is well above the noise floor of rasterization (<1px).
+ * Perturbations deliberately do NOT round their displacements.
+ *
+ * Rounding to integer logical pixels collapsed an entire magnitude band into the same
+ * handful of offsets: at the eval band, round(18 * mag) is only ever 1 or 2, so 24
+ * declared cases rendered to 7 distinct images and per-class variety was 1. Fractional
+ * coordinates are preserved so that supersampled rendering (renderSpec {scale}) turns
+ * every magnitude into a genuinely different image.
  */
+
+/** geometry defect: the hero panel is mispositioned as a rigid block. */
 function perturbGeometry(spec, mag) {
   const s = clone(spec);
-  for (const p of find(s, 'hero-panel')) shift(p, Math.round(18 * mag), Math.round(14 * mag));
-  for (const p of find(s, 'hero-text')) shift(p, Math.round(18 * mag), Math.round(14 * mag));
-  for (const p of find(s, 'hero-sub')) shift(p, Math.round(18 * mag), Math.round(14 * mag));
+  const dx = 18 * mag, dy = 14 * mag;
+  for (const kind of ['hero-panel', 'hero-text', 'hero-sub']) for (const p of find(s, kind)) shift(p, dx, dy);
   return { spec: s, label: 'geometry' };
 }
 
-/** typography defect: text sizes change materially (weight/size), boxes stay put. */
+/** typography defect: glyphs are re-rastered at a different size, in place. */
 function perturbTypography(spec, mag) {
   const s = clone(spec);
-  for (const p of find(s, 'header-text')) p.size = Math.round(p.size * (1 - 0.30 * mag));
-  for (const p of find(s, 'stat-value')) p.size = Math.round(p.size * (1 - 0.35 * mag));
-  for (const p of find(s, 'hero-text')) p.size = Math.round(p.size * (1 - 0.30 * mag));
-  for (const p of find(s, 'row-text-0')) p.size = Math.round(p.size * (1 - 0.25 * mag));
+  const shrink = (kind, k) => { for (const p of find(s, kind)) p.size = p.size * (1 - k * mag); };
+  shrink('header-text', 0.30);
+  shrink('stat-value', 0.35);
+  shrink('hero-text', 0.30);
+  shrink('row-text-0', 0.25);
   return { spec: s, label: 'typography' };
 }
 
-/** spacing defect: vertical gaps between sibling blocks collapse or expand. */
+/** spacing defect: the block below the hero is translated vertically. */
 function perturbSpacing(spec, mag) {
   const s = clone(spec);
-  const delta = Math.round(14 * mag);
-  const moveFrom = y0 => {
-    for (const p of s.prims) if (p.box[1] >= y0) shift(p, 0, delta);
-  };
-  // Squeeze everything below the hero panel upward.
-  moveFrom(s.prims.find(p => p.kind === 'button-primary').box[1]);
+  const delta = 14 * mag;
+  const y0 = s.prims.find(p => p.kind === 'button-primary').box[1];
+  for (const p of s.prims) if (p.box[1] >= y0) shift(p, 0, delta);
   return { spec: s, label: 'spacing' };
 }
 
-/** color defect: large regions swap to a materially different hue. */
+/** Mix two hex colours; t=0 -> a, t=1 -> b. Continuous in t. */
+function mix(a, b, t) {
+  const pa = [1, 3, 5].map(i => parseInt(a.slice(i, i + 2), 16));
+  const pb = [1, 3, 5].map(i => parseInt(b.slice(i, i + 2), 16));
+  const p = pa.map((v, i) => Math.round(v + (pb[i] - v) * t));
+  return '#' + p.map(v => v.toString(16).padStart(2, '0')).join('');
+}
+
+/** Rotate a hex colour's hue by `deg`, keeping saturation and value. */
+function rotateHue(hex, deg) {
+  let r = parseInt(hex.slice(1, 3), 16) / 255;
+  let g = parseInt(hex.slice(3, 5), 16) / 255;
+  let b = parseInt(hex.slice(5, 7), 16) / 255;
+  const mx = Math.max(r, g, b), mn = Math.min(r, g, b), d = mx - mn;
+  let h;
+  if (d === 0) h = 0;
+  else if (mx === r) h = (((g - b) / d) % 6 + 6) % 6;
+  else if (mx === g) h = (b - r) / d + 2;
+  else h = (r - g) / d + 4;
+  h = (h * 60 + deg) % 360; if (h < 0) h += 360;
+  const s = mx === 0 ? 0 : d / mx;
+  const c = mx * s, x = c * (1 - Math.abs(((h / 60) % 2) - 1)), m = mx - c;
+  const seg = Math.floor(h / 60) % 6;
+  const rgb = [[c, x, 0], [x, c, 0], [0, c, x], [0, x, c], [x, 0, c], [c, 0, x]][seg];
+  const to = v => Math.round((v + m) * 255);
+  return '#' + rgb.map(to).map(v => v.toString(16).padStart(2, '0')).join('');
+}
+
+/**
+ * color defect: the large panels take on a different HUE at the same saturation and
+ * lightness — i.e. the palette is wrong, not washed out. Continuous in mag, and
+ * deliberately orthogonal to `imagery`: hue moves while saturation is preserved.
+ */
 function perturbColor(spec, mag) {
   const s = clone(spec);
-  const swap = (kind, to) => { for (const p of find(s, kind)) p.fill = to; };
-  if (mag >= 1) {
-    swap('header-band', PALETTE.danger);
-    swap('hero-panel', PALETTE.warn);
-  } else {
-    swap('hero-panel', PALETTE.warn);
-  }
+  const deg = 200 * Math.min(1, mag);
+  for (const p of find(s, 'hero-panel')) p.fill = rotateHue(PALETTE.accent, deg);
+  for (const p of find(s, 'stat-card')) p.fill = mix(PALETTE.panel, rotateHue(PALETTE.panel, deg), 0.5);
   return { spec: s, label: 'color' };
 }
 
-/** imagery defect: an image-like panel is blanked / replaced by flat fill. */
+/**
+ * imagery defect: the hero artwork is progressively washed out — colour drains toward
+ * flat grey/white as if the asset failed to load. Continuous in mag, and orthogonal to
+ * `color`: saturation collapses while the small hue that remains stays put.
+ */
 function perturbImagery(spec, mag) {
   const s = clone(spec);
-  for (const p of find(s, 'hero-panel')) {
-    p.fill = mag >= 1 ? '#ffffff' : '#e5e7eb';
-  }
-  for (const p of find(s, 'hero-text')) p.fill = mag >= 1 ? '#ffffff' : '#9ca3af';
-  for (const p of find(s, 'hero-sub')) p.fill = mag >= 1 ? '#ffffff' : '#9ca3af';
+  const t = Math.min(1, mag);
+  // Drain toward the page background: saturation falls, luminance rises.
+  for (const p of find(s, 'hero-panel')) p.fill = mix(PALETTE.accent, '#f8fafc', t);
+  for (const p of find(s, 'hero-text')) p.fill = mix('#ffffff', '#f8fafc', t);
+  for (const p of find(s, 'hero-sub')) p.fill = mix('#ffffff', '#f8fafc', t);
   return { spec: s, label: 'imagery' };
 }
 
@@ -208,4 +259,16 @@ export function generateCases(seed = 1) {
   return { W: base.W, H: base.H, cases };
 }
 
-export { DEFECTS, clone, find, shift };
+export { DEFECTS, clone, find, shift, PERTURBERS };
+
+/**
+ * Apply one defect to a spec. Single source of truth shared by run.mjs, controls.mjs
+ * and difficulty.mjs — earlier these each carried their own divergent copy, which is
+ * how the eval band silently stopped matching the thing being measured.
+ */
+export function applyDefect(base, cls, mag) {
+  if (cls === 'clean') return { spec: clone(base), label: 'clean' };
+  const fn = PERTURBERS[cls];
+  if (!fn) throw new Error(`unknown defect class: ${cls}`);
+  return fn(base, mag);
+}

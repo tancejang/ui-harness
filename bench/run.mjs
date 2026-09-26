@@ -15,7 +15,7 @@
 //   node bench/run.mjs --json     # machine-readable
 //   node bench/run.mjs --hand     # hand-check the worked example
 
-import { generateCases, renderSpec, cleanSpec } from './fixture.mjs';
+import { renderSpec, cleanSpec, applyDefect, clone, RENDER_SCALE } from './fixture.mjs';
 import { classify, measurePair, decide } from './judge.mjs';
 
 const CLASSES = ['geometry', 'typography', 'spacing', 'color', 'imagery', 'clean'];
@@ -43,50 +43,12 @@ function buildSplit(nCasesPerClass, band, seed) {
   for (let rep = 0; rep < nCasesPerClass; rep++) {
     for (const cls of CLASSES) {
       n++;
-      if (cls === 'clean') {
-        out.push({ id: `${seed}-${String(n).padStart(3, '0')}`, label: 'clean', mag: 0, spec: { W: base.W, H: base.H, prims: base.prims.map(p => ({ ...p, box: [...p.box] })) } });
-        continue;
-      }
-      const mag = band[0] + rand() * (band[1] - band[0]);
-      const { spec, label } = perturb(base, cls, mag);
+      const mag = cls === 'clean' ? 0 : band[0] + rand() * (band[1] - band[0]);
+      const { spec, label } = applyDefect(base, cls, mag);
       out.push({ id: `${seed}-${String(n).padStart(3, '0')}`, label, mag: +mag.toFixed(3), spec });
     }
   }
   return out;
-}
-
-// Re-implement perturbations locally so the bands are independent of fixture.mjs defaults.
-function perturb(base, cls, mag) {
-  const s = { W: base.W, H: base.H, prims: base.prims.map(p => ({ ...p, box: [...p.box] })) };
-  const sel = k => s.prims.filter(p => p.kind === k);
-  const move = (k, dx, dy) => { for (const p of sel(k)) { p.box[0] += Math.round(dx); p.box[1] += Math.round(dy); } };
-  switch (cls) {
-    case 'geometry':
-      move('hero-panel', 18 * mag, 14 * mag); move('hero-text', 18 * mag, 14 * mag); move('hero-sub', 18 * mag, 14 * mag);
-      break;
-    case 'typography':
-      for (const p of sel('header-text')) p.size = Math.round(p.size * (1 - 0.30 * mag));
-      for (const p of sel('stat-value')) p.size = Math.round(p.size * (1 - 0.35 * mag));
-      for (const p of sel('hero-text')) p.size = Math.round(p.size * (1 - 0.30 * mag));
-      for (const p of sel('row-text-0')) p.size = Math.round(p.size * (1 - 0.25 * mag));
-      break;
-    case 'spacing': {
-      const y0 = sel('button-primary')[0].box[1];
-      for (const p of s.prims) if (p.box[1] >= y0) p.box[1] += Math.round(14 * mag);
-      break;
-    }
-    case 'color':
-      for (const p of sel('header-band')) p.fill = '#dc2626';
-      for (const p of sel('hero-panel')) p.fill = '#d97706';
-      break;
-    case 'imagery':
-      for (const p of sel('hero-panel')) p.fill = mag >= 0.85 ? '#ffffff' : '#e5e7eb';
-      for (const p of sel('hero-text')) p.fill = mag >= 0.85 ? '#ffffff' : '#9ca3af';
-      for (const p of sel('hero-sub')) p.fill = mag >= 0.85 ? '#ffffff' : '#9ca3af';
-      break;
-    default: throw new Error('bad class ' + cls);
-  }
-  return { spec: s, label: cls };
 }
 
 /** Label distribution as a normalised map over all classes. */
@@ -129,10 +91,10 @@ function fmtDist(d) {
   return '{' + LABELS.map(l => `${l}:${d[l]}`).join(',') + '}';
 }
 
-async function evaluate(pairs) {
+async function evaluate(pairs, scale) {
   const out = [];
   for (const c of pairs) {
-    const png = await renderSpec(c.spec);
+    const png = await renderSpec(c.spec, { scale });
     const r = await classify(c.refPng, png);
     out.push({ ...c, truth: c.label, png, pred: r.label, confidence: r.confidence, reason: r.reason, features: r.features });
   }
@@ -143,20 +105,26 @@ async function main() {
   const args = process.argv.slice(2);
   const asJson = args.includes('--json');
   const handCheck = args.includes('--hand');
+  const scaleArg = args.indexOf('--scale');
+  const SCALE = scaleArg >= 0 ? Number(args[scaleArg + 1]) : RENDER_SCALE;
 
-  const refPng = await renderSpec(cleanSpec());
+  const refPng = await renderSpec(cleanSpec(), { scale: SCALE });
 
   // TRAIN: 4 per class, HIGH severity 0.75..1.00 — the "obvious defect" regime.
   //   Thresholds in judge.mjs were tuned against this split only.
   // EVAL (held out): 4 per class, LOW severity 0.06..0.11 — a different regime entirely.
-  //   Chosen from bench/difficulty.mjs: below mag 0.12 the judge measurably breaks —
-  //   spacing under-detects to `clean`, geometry drifts to `typography`, and typography
-  //   drifts to `geometry`. That gradient is what improvement cycles push against.
+  //   Chosen from bench/difficulty.mjs: below mag 0.12 the judge measurably breaks, so
+  //   this band is where the remaining capability gaps live.
+  //
+  // The headline eval number is the MEAN over a seed sweep, not a single split. A single
+  // split can be a lucky draw: seed 97 scores 1.0000 while the 30-seed mean is ~0.964.
+  // Reporting one seed would repeat exactly the mistake this benchmark was built to fix.
   const trainRaw = buildSplit(4, [0.75, 1.0], 11).map(c => ({ ...c, refPng }));
   const evalRaw = buildSplit(4, [0.06, 0.11], 97).map(c => ({ ...c, refPng }));
+  const SWEEP_SEEDS = Array.from({ length: 12 }, (_, i) => (i + 1) * 7 + 90);
 
-  const train = await evaluate(trainRaw);
-  const evalSet = await evaluate(evalRaw);
+  const train = await evaluate(trainRaw, SCALE);
+  const evalSet = await evaluate(evalRaw, SCALE);
 
   const trainTruth = train.map(p => p.truth);
   const evalTruth = evalSet.map(p => p.truth);
@@ -170,13 +138,31 @@ async function main() {
   const trainDist = distribution(trainTruth);
   const evalDist = distribution(evalTruth);
 
+  // Multi-seed sweep. The headline eval score is the mean over these seeds, because a
+  // single split can be a lucky draw (seed 97 alone scores 1.0000).
+  const sweepAccs = [];
+  const sweepClassFail = Object.fromEntries(LABELS.map(l => [l, 0]));
+  const sweepClassTot = Object.fromEntries(LABELS.map(l => [l, 0]));
+  for (const seed of SWEEP_SEEDS) {
+    const cases = buildSplit(4, [0.06, 0.11], seed).map(c => ({ ...c, refPng }));
+    for (const c of cases) {
+      const png = await renderSpec(c.spec, { scale: SCALE });
+      const r = await classify(refPng, png);
+      sweepClassTot[c.label]++;
+      if (r.label === c.label) sweepAccs.push({ seed, ok: true });
+      else { sweepAccs.push({ seed, ok: false }); sweepClassFail[c.label]++; }
+    }
+  }
+  const sweepMean = sweepAccs.filter(a => a.ok).length / sweepAccs.length;
+  const evalAccMean = sweepMean;   // headline: robust across seeds, not one lucky split
+
   // ---------------------------------------------------------------- report
   const lines = [];
-  lines.push(`benchmark: ui-defect-classification  classes=${LABELS.length}  train_n=${train.length}  eval_n=${evalSet.length}`);
+  lines.push(`benchmark: ui-defect-classification  classes=${LABELS.length}  train_n=${train.length}  eval_n=${evalSet.length}  sweep_seeds=${SWEEP_SEEDS.length}`);
   lines.push('');
   lines.push('REQUIRED SINGLE-LINE REPORT (model / constant / random / train dist / eval dist)');
   lines.push(`TRAIN model=${trainAcc.toFixed(4)} const=${trainConst.score.toFixed(4)} rand=${trainRand.score.toFixed(4)} train_dist=${fmtDist(trainDist)} eval_dist=${fmtDist(evalDist)} split=train`);
-  lines.push(`EVAL  model=${evalAcc.toFixed(4)} const=${evalConst.score.toFixed(4)} rand=${evalRand.score.toFixed(4)} train_dist=${fmtDist(trainDist)} eval_dist=${fmtDist(evalDist)} split=eval`);
+  lines.push(`EVAL  model=${evalAccMean.toFixed(4)} const=${evalConst.score.toFixed(4)} rand=${evalRand.score.toFixed(4)} train_dist=${fmtDist(trainDist)} eval_dist=${fmtDist(evalDist)} split=eval`);
   lines.push('');
 
   // Degeneracy gate — the brief's hard requirement.
@@ -187,6 +173,29 @@ async function main() {
   if (trainClasses < 2 || evalClasses < 2) lines.push('*** STOP: a split collapsed to a single label — labelling is broken ***');
   lines.push('');
 
+  // Sweep detail — exposes per-class weakness that a single split hides.
+  const sweepFails = LABELS.filter(l => sweepClassFail[l] > 0);
+  lines.push(`sweep: mean=${sweepMean.toFixed(4)} single_split_seed97=${evalAcc.toFixed(4)} over ${SWEEP_SEEDS.length} seeds x ${evalSet.length} cases`);
+  lines.push(`  per-class failures across sweep: ${LABELS.map(l => l + ':' + sweepClassFail[l] + '/' + sweepClassTot[l]).join(',')}`);
+  if (sweepFails.length) lines.push(`  WEAK CLASSES: ${sweepFails.map(l => `${l} (${(100 * sweepClassFail[l] / sweepClassTot[l]).toFixed(1)}% fail)`).join(', ')}`);
+  lines.push('');
+
+  // Distinct-render gate. Guards against the failure this benchmark originally had:
+  // coordinate quantization collapsed a whole band into a handful of byte-identical
+  // images, so the score measured 7 inputs while claiming 24 cases.
+  const { createHash } = await import('node:crypto');
+  const uniqEval = new Set(evalSet.map(p => createHash('sha256').update(p.png).digest('hex')));
+  const perClass = {};
+  for (const l of LABELS) perClass[l] = new Set(evalSet.filter(p => p.truth === l).map(p => createHash('sha256').update(p.png).digest('hex'))).size;
+  const perClassCount = {};
+  for (const l of LABELS) perClassCount[l] = evalSet.filter(p => p.truth === l).length;
+  lines.push(`distinct renders: scale=${SCALE} eval_slots=${evalSet.length} distinct_images=${uniqEval.size} per_class=${LABELS.map(l => l + ':' + perClass[l] + '/' + perClassCount[l]).join(',')}`);
+  const dupClasses = LABELS.filter(l => l !== 'clean' && perClassCount[l] > 1 && perClass[l] < perClassCount[l]);
+  // `clean` is exempt: every clean case is by definition the unmodified spec, so a
+  // single distinct image there is correct rather than collapsed.
+  if (dupClasses.length) lines.push(`WARNING: quantization is collapsing the band — non-clean classes lacking variety: ${dupClasses.join(',')}`);
+  lines.push('');
+
   // Constant-predictor sanity: must never beat the least-frequent class share.
   lines.push('baseline sanity:');
   lines.push(`  constant predictor emits "${trainConst.label}" (train) / "${evalConst.label}" (eval)`);
@@ -194,20 +203,20 @@ async function main() {
   lines.push(`  random eval score  ${evalRand.score.toFixed(4)} ~= 1/${LABELS.length} = ${(1 / LABELS.length).toFixed(4)}`);
   lines.push('');
 
-  // Verdict
-  const beatsConst = evalAcc > evalConst.score;
-  lines.push(`VERDICT: eval model ${evalAcc.toFixed(4)} vs constant ${evalConst.score.toFixed(4)} -> ${beatsConst ? 'MODEL BEATS CONSTANT' : 'FAILED ROUND (does not beat constant)'}`);
+  // Verdict — decided on the sweep mean, not the single lucky split.
+  const beatsConst = evalAccMean > evalConst.score;
+  lines.push(`VERDICT: eval model(sweep mean) ${evalAccMean.toFixed(4)} vs constant ${evalConst.score.toFixed(4)} -> ${beatsConst ? 'MODEL BEATS CONSTANT' : 'FAILED ROUND (does not beat constant)'}`);
   lines.push('');
 
   // Confusion
-  lines.push('confusion (rows=truth, cols=pred):');
+  lines.push('confusion (rows=truth, cols=pred) for the single seed-97 split:');
   const cm = confusion(evalSet);
   lines.push('  ' + 'truth\\pred'.padEnd(12) + LABELS.map(l => l.slice(0, 8).padEnd(10)).join(''));
   for (const t of LABELS) lines.push('  ' + t.padEnd(12) + LABELS.map(p => String(cm[t][p]).padEnd(10)).join(''));
   lines.push('');
 
   if (evalAcc < 1) {
-    lines.push('eval errors:');
+    lines.push('eval errors (seed-97 split):');
     for (const p of evalSet.filter(x => x.pred !== x.truth)) {
       lines.push(`  ${p.id} truth=${p.truth} pred=${p.pred} conf=${p.confidence} :: ${p.reason}`);
     }
@@ -217,7 +226,11 @@ async function main() {
   const report = lines.join('\n');
   if (asJson) {
     console.log(JSON.stringify({
-      trainAcc, evalAcc,
+      trainAcc,
+      evalAcc: evalAccMean,          // headline: sweep mean
+      evalAccSingleSplit: evalAcc,   // seed-97 split, for transparency
+      sweepMean, sweepSeeds: SWEEP_SEEDS.length,
+      sweepClassFail, sweepClassTot,
       trainConst: trainConst.score, evalConst: evalConst.score,
       trainRand: trainRand.score, evalRand: evalRand.score,
       trainDist, evalDist, minShare, beatsConst,

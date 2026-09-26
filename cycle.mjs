@@ -98,21 +98,35 @@ async function main() {
     const phase = arg('phase');
     const c = await findOpen(piece);
     if (!c) throw new Error(`no open cycle for piece "${piece}"`);
-    const j = await runEval();
+    const explicit = arg('value');
+    let j = null, score, unitPct = null;
+    if (explicit !== null) {
+      // Recording a value eval.mjs can no longer reproduce, because the instrument
+      // itself is what changed. Requires an explicit --note explaining the provenance.
+      score = Number(explicit);
+    } else {
+      j = await runEval();
+      score = j.bench.score;
+      unitPct = `${j.unit.passed}/${j.unit.total}`;
+    }
     if (phase === 'before') {
-      c.before = j.bench.score;
-      c.unitBefore = j.unit.score;
-      c.beforeDetail = { bench: j.bench, unit: { score: j.unit.score, passed: j.unit.passed, total: j.unit.total } };
+      c.before = score;
+      c.unitBefore = unitPct;
+      if (j) c.beforeDetail = { bench: j.bench, unit: { score: j.unit.score, passed: j.unit.passed, total: j.unit.total } };
+      if (explicit !== null) c.beforeNote = arg('note', 'historical value recorded manually');
     } else if (phase === 'after') {
-      c.after = j.bench.score;
-      c.unitAfter = j.unit.score;
-      c.afterDetail = { bench: j.bench, unit: { score: j.unit.score, passed: j.unit.passed, total: j.unit.total } };
+      c.after = score;
+      c.unitAfter = unitPct;
+      if (j) c.afterDetail = { bench: j.bench, unit: { score: j.unit.score, passed: j.unit.passed, total: j.unit.total } };
+      if (explicit !== null) c.afterNote = arg('note', 'historical value recorded manually');
     } else throw new Error('--phase must be before|after');
     if (c.before != null && c.after != null) c.delta = Number((c.after - c.before).toFixed(4));
-    c.evalVerdict = j.verdict;
-    c.regressionGate = { unitFailed: j.unit.failed, unitClean: j.unit.failed === 0 };
+    if (j) {
+      c.evalVerdict = j.verdict;
+      c.regressionGate = { unitFailed: j.unit.failed, unitClean: j.unit.failed === 0 };
+    }
     await writeCycle(c);
-    console.log(JSON.stringify({ cycle: c.cycle, phase, score: phase === 'before' ? c.before : c.after, unit: j.unit.passed + '/' + j.unit.total, problems: j.verdict.problems }, null, 2));
+    console.log(JSON.stringify({ cycle: c.cycle, phase, score, unit: unitPct, problems: j?.verdict?.problems }, null, 2));
     return;
   }
 

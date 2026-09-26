@@ -1,0 +1,767 @@
+[
+  {
+    "depth": 0,
+    "title": "Starting from Scratch",
+    "page": 6
+  },
+  {
+    "depth": 1,
+    "title": "Start with a feature, not a layout",
+    "page": 7
+  },
+  {
+    "depth": 1,
+    "title": "Detail comes later",
+    "page": 11
+  },
+  {
+    "depth": 2,
+    "title": "Hold the color",
+    "page": 11
+  },
+  {
+    "depth": 2,
+    "title": "Don’t over-invest",
+    "page": 13
+  },
+  {
+    "depth": 1,
+    "title": "Don’t design too much",
+    "page": 15
+  },
+  {
+    "depth": 2,
+    "title": "Work in cycles",
+    "page": 16
+  },
+  {
+    "depth": 2,
+    "title": "Be a pessimist",
+    "page": 17
+  },
+  {
+    "depth": 1,
+    "title": "Choose a personality",
+    "page": 19
+  },
+  {
+    "depth": 2,
+    "title": "Font choice",
+    "page": 20
+  },
+  {
+    "depth": 2,
+    "title": "Color",
+    "page": 21
+  },
+  {
+    "depth": 2,
+    "title": "Border radius",
+    "page": 23
+  },
+  {
+    "depth": 2,
+    "title": "Language",
+    "page": 24
+  },
+  {
+    "depth": 2,
+    "title": "Deciding what you actually want",
+    "page": 25
+  },
+  {
+    "depth": 1,
+    "title": "Limit your choices",
+    "page": 27
+  },
+  {
+    "depth": 2,
+    "title": "Define systems in advance",
+    "page": 28
+  },
+  {
+    "depth": 2,
+    "title": "Designing by process of elimination",
+    "page": 29
+  },
+  {
+    "depth": 2,
+    "title": "Systematize everything",
+    "page": 30
+  },
+  {
+    "depth": 0,
+    "title": "Hierarchy is Everything",
+    "page": 34
+  },
+  {
+    "depth": 1,
+    "title": "Not all elements are equal",
+    "page": 35
+  },
+  {
+    "depth": 1,
+    "title": "Size isn’t everything",
+    "page": 37
+  },
+  {
+    "depth": 1,
+    "title": "Don’t use grey text on colored backgrounds",
+    "page": 41
+  },
+  {
+    "depth": 1,
+    "title": "Emphasize by de-emphasizing",
+    "page": 45
+  },
+  {
+    "depth": 1,
+    "title": "Labels are a last resort",
+    "page": 47
+  },
+  {
+    "depth": 2,
+    "title": "You might not need a label at all",
+    "page": 47
+  },
+  {
+    "depth": 2,
+    "title": "Combine labels and values",
+    "page": 48
+  },
+  {
+    "depth": 2,
+    "title": "Labels are secondary",
+    "page": 49
+  },
+  {
+    "depth": 2,
+    "title": "When to emphasize a label",
+    "page": 50
+  },
+  {
+    "depth": 1,
+    "title": "Separate visual hierarchy from document hierarchy",
+    "page": 53
+  },
+  {
+    "depth": 1,
+    "title": "Balance weight and contrast",
+    "page": 55
+  },
+  {
+    "depth": 2,
+    "title": "Using contrast to compensate for weight",
+    "page": 55
+  },
+  {
+    "depth": 2,
+    "title": "Using weight to compensate for contrast",
+    "page": 57
+  },
+  {
+    "depth": 1,
+    "title": "Semantics are secondary",
+    "page": 59
+  },
+  {
+    "depth": 2,
+    "title": "Destructive actions",
+    "page": 61
+  },
+  {
+    "depth": 0,
+    "title": "Layout and Spacing",
+    "page": 64
+  },
+  {
+    "depth": 1,
+    "title": "Start with too much white space",
+    "page": 65
+  },
+  {
+    "depth": 2,
+    "title": "White space should be removed, not added",
+    "page": 66
+  },
+  {
+    "depth": 2,
+    "title": "Dense UIs have their place",
+    "page": 68
+  },
+  {
+    "depth": 1,
+    "title": "Establish a spacing and sizing system",
+    "page": 69
+  },
+  {
+    "depth": 2,
+    "title": "A linear scale won’t work",
+    "page": 70
+  },
+  {
+    "depth": 2,
+    "title": "Defining the system",
+    "page": 71
+  },
+  {
+    "depth": 2,
+    "title": "Using the system",
+    "page": 72
+  },
+  {
+    "depth": 1,
+    "title": "You don’t have to fill the whole screen",
+    "page": 75
+  },
+  {
+    "depth": 2,
+    "title": "Shrink the canvas",
+    "page": 77
+  },
+  {
+    "depth": 2,
+    "title": "Thinking in columns",
+    "page": 78
+  },
+  {
+    "depth": 2,
+    "title": "Don’t force it",
+    "page": 81
+  },
+  {
+    "depth": 1,
+    "title": "Grids are overrated",
+    "page": 83
+  },
+  {
+    "depth": 2,
+    "title": "Not all elements should be fluid",
+    "page": 83
+  },
+  {
+    "depth": 2,
+    "title": "Don’t shrink an element until you need to",
+    "page": 87
+  },
+  {
+    "depth": 1,
+    "title": "Relative sizing doesn’t scale",
+    "page": 91
+  },
+  {
+    "depth": 2,
+    "title": "Relationships within elements",
+    "page": 93
+  },
+  {
+    "depth": 1,
+    "title": "Avoid ambiguous spacing",
+    "page": 95
+  },
+  {
+    "depth": 0,
+    "title": "Designing Text",
+    "page": 100
+  },
+  {
+    "depth": 1,
+    "title": "Establish a type scale",
+    "page": 101
+  },
+  {
+    "depth": 2,
+    "title": "Choosing a scale",
+    "page": 102
+  },
+  {
+    "depth": 3,
+    "title": "Modular scales",
+    "page": 102
+  },
+  {
+    "depth": 3,
+    "title": "You end up with fractional values.",
+    "page": 103
+  },
+  {
+    "depth": 3,
+    "title": "You usually need more sizes.",
+    "page": 103
+  },
+  {
+    "depth": 3,
+    "title": "Hand-crafted scales",
+    "page": 103
+  },
+  {
+    "depth": 2,
+    "title": "Avoid em units",
+    "page": 105
+  },
+  {
+    "depth": 1,
+    "title": "Use good fonts",
+    "page": 107
+  },
+  {
+    "depth": 2,
+    "title": "Play it safe",
+    "page": 107
+  },
+  {
+    "depth": 2,
+    "title": "Ignore typefaces with less than five weights",
+    "page": 108
+  },
+  {
+    "depth": 2,
+    "title": "Optimize for legibility",
+    "page": 109
+  },
+  {
+    "depth": 2,
+    "title": "Trust the wisdom of the crowd",
+    "page": 109
+  },
+  {
+    "depth": 2,
+    "title": "Steal from people who care",
+    "page": 110
+  },
+  {
+    "depth": 2,
+    "title": "Developing your intuition",
+    "page": 111
+  },
+  {
+    "depth": 1,
+    "title": "Keep your line length in check",
+    "page": 113
+  },
+  {
+    "depth": 2,
+    "title": "Dealing with wider content",
+    "page": 114
+  },
+  {
+    "depth": 1,
+    "title": "Baseline, not center",
+    "page": 117
+  },
+  {
+    "depth": 1,
+    "title": "Line-height is proportional",
+    "page": 121
+  },
+  {
+    "depth": 2,
+    "title": "Accounting for line length",
+    "page": 121
+  },
+  {
+    "depth": 2,
+    "title": "Accounting for font size",
+    "page": 123
+  },
+  {
+    "depth": 1,
+    "title": "Not every link needs a color",
+    "page": 125
+  },
+  {
+    "depth": 1,
+    "title": "Align with readability in mind",
+    "page": 127
+  },
+  {
+    "depth": 2,
+    "title": "Don’t center long form text",
+    "page": 127
+  },
+  {
+    "depth": 2,
+    "title": "Right-align numbers",
+    "page": 129
+  },
+  {
+    "depth": 2,
+    "title": "Hyphenate justified text",
+    "page": 129
+  },
+  {
+    "depth": 1,
+    "title": "Use letter-spacing effectively",
+    "page": 131
+  },
+  {
+    "depth": 2,
+    "title": "Tightening headlines",
+    "page": 132
+  },
+  {
+    "depth": 2,
+    "title": "Improving all-caps legibility",
+    "page": 133
+  },
+  {
+    "depth": 0,
+    "title": "Working with Color",
+    "page": 136
+  },
+  {
+    "depth": 1,
+    "title": "Ditch hex for HSL",
+    "page": 137
+  },
+  {
+    "depth": 2,
+    "title": "HSL vs. HSB",
+    "page": 139
+  },
+  {
+    "depth": 1,
+    "title": "You need more colors than you think",
+    "page": 141
+  },
+  {
+    "depth": 2,
+    "title": "What you actually need",
+    "page": 142
+  },
+  {
+    "depth": 3,
+    "title": "Greys",
+    "page": 142
+  },
+  {
+    "depth": 3,
+    "title": "Primary color(s)",
+    "page": 144
+  },
+  {
+    "depth": 3,
+    "title": "Accent colors",
+    "page": 144
+  },
+  {
+    "depth": 1,
+    "title": "Define your shades up front",
+    "page": 147
+  },
+  {
+    "depth": 2,
+    "title": "Choose the base color first",
+    "page": 147
+  },
+  {
+    "depth": 2,
+    "title": "Finding the edges",
+    "page": 148
+  },
+  {
+    "depth": 2,
+    "title": "Filling in the gaps",
+    "page": 149
+  },
+  {
+    "depth": 2,
+    "title": "What about greys?",
+    "page": 150
+  },
+  {
+    "depth": 2,
+    "title": "It’s not a science",
+    "page": 150
+  },
+  {
+    "depth": 1,
+    "title": "Don’t let lightness kill your saturation",
+    "page": 151
+  },
+  {
+    "depth": 2,
+    "title": "Use perceived brightness to your advantage",
+    "page": 152
+  },
+  {
+    "depth": 2,
+    "title": "Changing brightness by rotating hue",
+    "page": 153
+  },
+  {
+    "depth": 1,
+    "title": "Greys don’t have to be grey",
+    "page": 157
+  },
+  {
+    "depth": 2,
+    "title": "Color temperature",
+    "page": 158
+  },
+  {
+    "depth": 1,
+    "title": "Accessible doesn’t have to mean ugly",
+    "page": 161
+  },
+  {
+    "depth": 2,
+    "title": "Flipping the contrast",
+    "page": 162
+  },
+  {
+    "depth": 2,
+    "title": "Rotating the hue",
+    "page": 163
+  },
+  {
+    "depth": 1,
+    "title": "Don’t rely on color alone",
+    "page": 165
+  },
+  {
+    "depth": 0,
+    "title": "Creating Depth",
+    "page": 170
+  },
+  {
+    "depth": 1,
+    "title": "Emulate a light source",
+    "page": 171
+  },
+  {
+    "depth": 2,
+    "title": "Light comes from above",
+    "page": 172
+  },
+  {
+    "depth": 2,
+    "title": "Simulating light in a user interface",
+    "page": 174
+  },
+  {
+    "depth": 3,
+    "title": "Raised elements",
+    "page": 174
+  },
+  {
+    "depth": 3,
+    "title": "Inset elements",
+    "page": 176
+  },
+  {
+    "depth": 2,
+    "title": "Don’t get carried away",
+    "page": 178
+  },
+  {
+    "depth": 1,
+    "title": "Use shadows to convey elevation",
+    "page": 179
+  },
+  {
+    "depth": 2,
+    "title": "Establishing an elevation system",
+    "page": 181
+  },
+  {
+    "depth": 2,
+    "title": "Combining shadows with interaction",
+    "page": 182
+  },
+  {
+    "depth": 1,
+    "title": "Shadows can have two parts",
+    "page": 185
+  },
+  {
+    "depth": 2,
+    "title": "Accounting for elevation",
+    "page": 187
+  },
+  {
+    "depth": 1,
+    "title": "Even flat designs can have depth",
+    "page": 189
+  },
+  {
+    "depth": 2,
+    "title": "Creating depth with color",
+    "page": 190
+  },
+  {
+    "depth": 2,
+    "title": "Using solid shadows",
+    "page": 191
+  },
+  {
+    "depth": 1,
+    "title": "Overlap elements to create layers",
+    "page": 193
+  },
+  {
+    "depth": 2,
+    "title": "Overlapping images",
+    "page": 194
+  },
+  {
+    "depth": 0,
+    "title": "Working with Images",
+    "page": 198
+  },
+  {
+    "depth": 1,
+    "title": "Use good photos",
+    "page": 199
+  },
+  {
+    "depth": 1,
+    "title": "Text needs consistent contrast",
+    "page": 201
+  },
+  {
+    "depth": 2,
+    "title": "The problem with background images",
+    "page": 201
+  },
+  {
+    "depth": 2,
+    "title": "Add an overlay",
+    "page": 202
+  },
+  {
+    "depth": 2,
+    "title": "Lower the image contrast",
+    "page": 203
+  },
+  {
+    "depth": 2,
+    "title": "Colorize the image",
+    "page": 204
+  },
+  {
+    "depth": 2,
+    "title": "Add a text shadow",
+    "page": 205
+  },
+  {
+    "depth": 1,
+    "title": "Everything has an intended size",
+    "page": 207
+  },
+  {
+    "depth": 2,
+    "title": "Don’t scale up icons",
+    "page": 207
+  },
+  {
+    "depth": 2,
+    "title": "Don’t scale down screenshots",
+    "page": 209
+  },
+  {
+    "depth": 2,
+    "title": "Don’t scale down icons, either",
+    "page": 211
+  },
+  {
+    "depth": 1,
+    "title": "Beware user-uploaded content",
+    "page": 213
+  },
+  {
+    "depth": 2,
+    "title": "Control the shape and size",
+    "page": 213
+  },
+  {
+    "depth": 2,
+    "title": "Prevent background bleed",
+    "page": 215
+  },
+  {
+    "depth": 0,
+    "title": "Finishing Touches",
+    "page": 218
+  },
+  {
+    "depth": 1,
+    "title": "Supercharge the defaults",
+    "page": 219
+  },
+  {
+    "depth": 1,
+    "title": "Add color with accent borders",
+    "page": 223
+  },
+  {
+    "depth": 1,
+    "title": "Decorate your backgrounds",
+    "page": 227
+  },
+  {
+    "depth": 2,
+    "title": "Change the background color",
+    "page": 227
+  },
+  {
+    "depth": 2,
+    "title": "Use a repeating pattern",
+    "page": 229
+  },
+  {
+    "depth": 2,
+    "title": "Add a simple shape or illustration",
+    "page": 230
+  },
+  {
+    "depth": 1,
+    "title": "Don’t overlook empty states",
+    "page": 233
+  },
+  {
+    "depth": 1,
+    "title": "Use fewer borders",
+    "page": 237
+  },
+  {
+    "depth": 2,
+    "title": "Use a box shadow",
+    "page": 238
+  },
+  {
+    "depth": 2,
+    "title": "Use two different background colors",
+    "page": 239
+  },
+  {
+    "depth": 2,
+    "title": "Add extra spacing",
+    "page": 240
+  },
+  {
+    "depth": 1,
+    "title": "Think outside the box",
+    "page": 241
+  },
+  {
+    "depth": 0,
+    "title": "Leveling Up",
+    "page": 248
+  },
+  {
+    "depth": 1,
+    "title": "Leveling up",
+    "page": 249
+  },
+  {
+    "depth": 2,
+    "title": "Look for decisions you wouldn’t have made",
+    "page": 249
+  },
+  {
+    "depth": 2,
+    "title": "Rebuild your favorite interfaces",
+    "page": 250
+  }
+]

@@ -215,7 +215,7 @@ export async function measurePair(referencePng, candidatePng) {
 export function decide(m) {
   const {
     fracTop, fracMid, fracBot, dText, bandsA, changedRows,
-    dHue, dSat, dLum, dHero, geoEnergy, textA,
+    dHue, dSat, dLum, dHero, geoEnergy, textA, satA, satB,
   } = m;
 
   const relChanged = changedRows / m.H;
@@ -229,27 +229,93 @@ export function decide(m) {
     return { label: 'clean', confidence: 0.95, reason: `near-identical (geoEnergy=${geoEnergy.toFixed(2)}, changedRows=${changedRows})`, features: m };
   }
 
-  // --- 2. imagery: hero region loses saturation AND gains luminance (blanked to white/grey)
-  if (dSat > 0.25 && dLum > 25) {
-    push(`hero blanked (dSat=${dSat.toFixed(2)}, dLum=${dLum.toFixed(1)})`);
+  // --- 2/3. colour defects, decided on ORTHOGONAL axes -----------------------
+  //
+  // `color` and `imagery` both repaint large flat regions, so geometry-style energy
+  // cannot tell them apart — but they move different, independent quantities:
+  //
+  //   color   rotates HUE at constant saturation  -> dSat ~= 0.000, dHue large
+  //   imagery drains SATURATION toward grey/white -> dHue == 0,    dSat large, dLum > 0
+  //
+  // Measured over mag 0.06..1.0: color gives dSat in [-0.004, +0.005] while dHue climbs
+  // 10..160; imagery gives dHue == 0 exactly while dSat climbs 0.020..0.263 and dLum
+  // 3.5..57.3. So the two axes are genuinely separable and neither class needs to be
+  // guessed from shape.
+  //
+  // Both are checked before the layout rules because a repaint also perturbs row/column
+  // difference energy, which would otherwise let `geometry` or `typography` claim them.
+  // The saturation test is a ratio rather than a fixed bar so it survives rescalings of
+  // the fixture's palette: what matters is that saturation was destroyed, not its size.
+  const satDrained = satA > 0.05 ? dSat / satA : 0;   // fraction of original saturation lost
+  // A layout blit also drains a little saturation (areas shift onto differently coloured
+  // neighbours), so saturation loss alone is not sufficient. What separates a genuine
+  // wash-out is that the luminance gain is large RELATIVE to the structural displacement:
+  // over mag 0.06..1.0 imagery gives dLum/geoEnergy of 0.98..1.38 with dHue == 0, while
+  // geometry gives 0.23..0.78 (its energy is spent moving pixels, not brightening them).
+  const washOut = geoEnergy > 0 ? dLum / geoEnergy : 0;
+  if (satDrained > 0.06 && dLum > 1.5 && washOut > 0.9 && dHue === 0) {
+    push(`hero washed out: saturation -${(satDrained * 100).toFixed(0)}%, luminance +${dLum.toFixed(1)} at ${washOut.toFixed(2)}x structural energy, hue unchanged -> artwork lost`);
     return { label: 'imagery', confidence: 0.85, reason: notes.join('; '), features: m };
   }
+  if (dHue >= 0 && dHue > 6 && Math.abs(dSat) < 0.02 && dHero > 5) {
+    push(`hue rotated ${dHue.toFixed(0)}deg at constant saturation (dSat=${dSat.toFixed(3)}, dHero=${dHero.toFixed(1)}) -> wrong palette`);
+    return { label: 'color', confidence: 0.82, reason: notes.join('; '), features: m };
+  }
 
-  // --- 3. color: dominant hue rotates materially ---------------------------
-  if (dHue >= 0 && dHue > 55 && dHero > 60) {
-    push(`hue rotated (dHue=${dHue.toFixed(0)}deg, dHero=${dHero.toFixed(0)})`);
-    return { label: 'color', confidence: 0.85, reason: notes.join('; '), features: m };
+  // --- 3b. decisive structural override ---------------------------------------
+  //     Before the text-mass test, check whether the difference is spatially confined to
+  //     a single vertical third. Re-rasterised glyphs change edges wherever text lives,
+  //     which straddles the header, the stat row and the hero — it cannot concentrate in
+  //     one third. A displaced panel is one rigid block, so its energy sits in exactly
+  //     one third (measured: geometry fracMid = 1.000 with fracTop = fracBot = 0.000).
+  //
+  //     This override exists because supersampled rendering gives antialiased text edges
+  //     a slightly different gradient count under pure translation, so |relText| is no
+  //     longer exactly 0 and the ink-loss test below would misread a moved panel as a
+  //     re-rastered one. Spatial confinement is the more reliable signal at that point.
+  //
+  //     "Confined to one third" means one third holds ~everything AND the others hold
+  //     ~nothing. Measured over mag 0.06..1.0: geometry gives (top,mid,bot) =
+  //     (0.000, 1.000, 0.000) at every magnitude, while spacing gives (0.000, 0.073,
+  //     0.927). Typography is the case that must NOT match: it gives top 0.556..0.701
+  //     with mid 0.299..0.444, i.e. energy split across two thirds, because glyphs
+  //     change in the header band AND the stat row AND the hero. Requiring the other
+  //     thirds to be near-empty is what keeps typography out of this branch.
+  const third = Math.max(fracTop, fracMid, fracBot);
+  const others = [fracTop, fracMid, fracBot].filter(v => v !== third);
+  if (relChanged > 0.02 && third > 0.9 && Math.max(...others) < 0.1) {
+    const label = fracBot === third ? 'spacing' : 'geometry';
+    push(`difference confined to one third (top=${fracTop.toFixed(3)}, mid=${fracMid.toFixed(3)}, bot=${fracBot.toFixed(3)}) -> single rigid block displacement, not glyph re-rasterisation`);
+    return { label, confidence: 0.8, reason: notes.join('; '), features: m };
   }
 
   // --- 4. typography: glyphs change size in place ------------------------------
-  //     Key invariant: typography alters a LOT of pixels (glyph edges move within
-  //     their boxes) while displacing almost no *structure* — geoEnergy stays in the
-  //     low single digits even at full severity, whereas every panel-moving class
-  //     starts around 4.5 and climbs steeply. So the reliable discriminator is
-  //     "large pixel churn + tiny structural energy", not the size of the text change.
-  if (geoEnergy < 4.0 && changedRows >= 20) {
-    push(`high pixel churn (changedRows=${changedRows}) with minimal structural energy (geo=${geoEnergy.toFixed(2)}) -> in-place glyph change`);
-    return { label: 'typography', confidence: 0.78, reason: notes.join('; '), features: m };
+  //     A layout defect spends a lot of structural energy to move a little content: one
+  //     rigid block produces large row/column differences over relatively few rows.
+  //     Re-rasterising glyphs is the opposite — many rows change while the absolute
+  //     difference energy stays small, because glyph edges shift a little rather than a
+  //     whole panel moving a lot. So the separator is changedRows per unit of
+  //     structural energy.
+  //
+  //     Measured over mag 0.06..1.0 at scale 4:
+  //       geometry    ratio 24.0 .. 45.0
+  //       spacing     ratio 16.8 .. 21.9
+  //       typography  ratio 56.5 .. 100.0     <- clean gap above the layout classes
+  //     A cut at 50 sits inside that gap. (`color`/`imagery` also give high ratios, since
+  //     a repaint touches every row at low energy, but both are decided by their
+  //     orthogonal saturation/hue rules above and never reach this branch.)
+  //
+  //     |relText| alone is NOT sufficient: supersampled antialiasing gives pure
+  //     translation a few percent of apparent ink change (geometry spans -0.014..+0.107),
+  //     which overlaps typography's own -0.014..-0.143.
+  //     geoEnergy alone is not sufficient either: at this band geometry spans 2.64..4.07
+  //     while typography spans 1.67..2.51, so the old absolute bar of 4.0 sat inside the
+  //     geometry range and swallowed every geometry case. It is kept below only as a
+  //     cheap upper bound on what this rule may claim.
+  const churnRatio = geoEnergy > 0 ? changedRows / geoEnergy : Infinity;
+  if (churnRatio > 50 && geoEnergy < 12 && changedRows >= 8) {
+    push(`high row churn per unit structural energy (changedRows=${changedRows} / geo=${geoEnergy.toFixed(2)} = ${churnRatio.toFixed(1)}, text mass ${(relText * 100).toFixed(1)}%) -> in-place glyph re-rasterisation`);
+    return { label: 'typography', confidence: 0.8, reason: notes.join('; '), features: m };
   }
   if (Math.abs(relText) > 0.08 && geoEnergy < 12) {
     push(`text mass changed ${(relText * 100).toFixed(1)}% with near-static layout (geo=${geoEnergy.toFixed(1)})`);

@@ -9,8 +9,7 @@
 //   C4 noise floor             : sub-threshold jitter must be called `clean`
 //   C5 hand-check              : one case computed by hand
 
-import sharp from 'sharp';
-import { cleanSpec, renderSpec, PALETTE } from './fixture.mjs';
+import { cleanSpec, renderSpec, applyDefect, clone, RENDER_SCALE } from './fixture.mjs';
 import { classify, measurePair } from './judge.mjs';
 
 function mulberry32(a) {
@@ -22,32 +21,7 @@ function mulberry32(a) {
   };
 }
 
-const clone = s => ({ W: s.W, H: s.H, prims: s.prims.map(p => ({ ...p, box: [...p.box] })) });
 const sel = (s, k) => s.prims.filter(p => p.kind === k);
-
-function perturb(base, cls, mag) {
-  const s = clone(base);
-  const move = (k, dx, dy) => { for (const p of sel(s, k)) { p.box[0] += Math.round(dx); p.box[1] += Math.round(dy); } };
-  switch (cls) {
-    case 'geometry': move('hero-panel', 18 * mag, 14 * mag); move('hero-text', 18 * mag, 14 * mag); move('hero-sub', 18 * mag, 14 * mag); break;
-    case 'typography':
-      for (const p of sel(s, 'header-text')) p.size = Math.round(p.size * (1 - 0.30 * mag));
-      for (const p of sel(s, 'stat-value')) p.size = Math.round(p.size * (1 - 0.35 * mag));
-      for (const p of sel(s, 'hero-text')) p.size = Math.round(p.size * (1 - 0.30 * mag));
-      break;
-    case 'spacing': { const y0 = sel(s, 'button-primary')[0].box[1]; for (const p of s.prims) if (p.box[1] >= y0) p.box[1] += Math.round(14 * mag); break; }
-    case 'color':
-      for (const p of sel(s, 'header-band')) p.fill = '#dc2626';
-      for (const p of sel(s, 'hero-panel')) p.fill = '#d97706';
-      break;
-    case 'imagery':
-      for (const p of sel(s, 'hero-panel')) p.fill = mag >= 0.85 ? '#ffffff' : '#e5e7eb';
-      for (const p of sel(s, 'hero-text')) p.fill = mag >= 0.85 ? '#ffffff' : '#9ca3af';
-      for (const p of sel(s, 'hero-sub')) p.fill = mag >= 0.85 ? '#ffffff' : '#9ca3af';
-      break;
-  }
-  return s;
-}
 
 const CLASSES = ['geometry', 'typography', 'spacing', 'color', 'imagery', 'clean'];
 
@@ -57,15 +31,15 @@ async function build(seed, per, band) {
   const out = [];
   for (let rep = 0; rep < per; rep++) {
     for (const cls of CLASSES) {
-      if (cls === 'clean') { out.push({ spec: clone(base), label: 'clean', mag: 0 }); continue; }
-      const mag = band[0] + rand() * (band[1] - band[0]);
-      out.push({ spec: perturb(base, cls, mag), label: cls, mag: +mag.toFixed(3) });
+      const mag = cls === 'clean' ? 0 : band[0] + rand() * (band[1] - band[0]);
+      const { spec, label } = applyDefect(base, cls, mag);
+      out.push({ spec, label, mag: +mag.toFixed(3) });
     }
   }
   return out;
 }
 
-const refPng = await renderSpec(cleanSpec());
+const refPng = await renderSpec(cleanSpec(), { scale: RENDER_SCALE });
 const log = [];
 const say = s => { log.push(s); console.log(s); };
 
@@ -76,7 +50,7 @@ const say = s => { log.push(s); console.log(s); };
   const rand = mulberry32(999);
   const preds = [];
   for (const c of cases) {
-    const png = await renderSpec(c.spec);
+    const png = await renderSpec(c.spec, { scale: RENDER_SCALE });
     const r = await classify(refPng, png);
     preds.push(r.label);
   }
@@ -97,7 +71,7 @@ const say = s => { log.push(s); console.log(s); };
   const s = clone(base);
   const y0 = sel(s, 'button-primary')[0].box[1];
   for (const p of s.prims) if (p.box[1] >= y0) p.box[0] += 46;   // pure X shift, no Y change
-  const png = await renderSpec(s);
+  const png = await renderSpec(s, { scale: RENDER_SCALE });
   const m = await measurePair(refPng, png);
   const r = await classify(refPng, png);
   say(`  measured geoEnergy=${m.geoEnergy.toFixed(2)} fracMid=${m.fracMid.toFixed(3)} fracBot=${m.fracBot.toFixed(3)}`);
@@ -112,8 +86,8 @@ const say = s => { log.push(s); console.log(s); };
   const cases = await build(3, 1, [0.8, 1.0]);
   const geo = cases.find(c => c.label === 'geometry');
   const col = cases.find(c => c.label === 'color');
-  const geoPng = await renderSpec(geo.spec);
-  const colPng = await renderSpec(col.spec);
+  const geoPng = await renderSpec(geo.spec, { scale: RENDER_SCALE });
+  const colPng = await renderSpec(col.spec, { scale: RENDER_SCALE });
   // Feed the COLOR case's pixels but claim nothing; then feed GEO pixels.
   const rGeo = await classify(refPng, geoPng);
   const rCol = await classify(refPng, colPng);
@@ -132,7 +106,7 @@ const say = s => { log.push(s); console.log(s); };
   const s = clone(cleanSpec());
   // 1px jitter is inaudible to the thresholds.
   for (const p of sel(s, 'hero-panel')) { p.box[0] += 1; }
-  const png = await renderSpec(s);
+  const png = await renderSpec(s, { scale: RENDER_SCALE });
   const m = await measurePair(refPng, png);
   const r = await classify(refPng, png);
   say(`  geoEnergy=${m.geoEnergy.toFixed(3)} changedRows=${m.changedRows} -> "${r.label}"`);
@@ -149,8 +123,8 @@ const say = s => { log.push(s); console.log(s); };
   // hero is the largest single region in that third. Therefore fracMid must dominate and the
   // class must be geometry. Spacing, by contrast, moves the block below y=460, i.e. the
   // bottom third, so fracBot must dominate.
-  const m = await measurePair(refPng, await renderSpec(perturb(cleanSpec(), 'geometry', 1)));
-  const ms = await measurePair(refPng, await renderSpec(perturb(cleanSpec(), 'spacing', 1)));
+  const m = await measurePair(refPng, await renderSpec(applyDefect(cleanSpec(), 'geometry', 1).spec, { scale: RENDER_SCALE }));
+  const ms = await measurePair(refPng, await renderSpec(applyDefect(cleanSpec(), 'spacing', 1).spec, { scale: RENDER_SCALE }));
   say(`  hand prediction: geometry fracMid > fracBot ; spacing fracBot > fracMid`);
   say(`  geometry: fracMid=${m.fracMid.toFixed(3)} fracBot=${m.fracBot.toFixed(3)} -> ${m.fracMid > m.fracBot ? 'MATCHES' : 'CONTRADICTS'}`);
   say(`  spacing : fracMid=${ms.fracMid.toFixed(3)} fracBot=${ms.fracBot.toFixed(3)} -> ${ms.fracBot > ms.fracMid ? 'MATCHES' : 'CONTRADICTS'}`);
