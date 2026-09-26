@@ -350,10 +350,30 @@ export function decide(m) {
   //   every third is 0.000 and the max would otherwise be ambiguous.
   const thirdMax = Math.max(fracTop, fracMid, fracBot);
   const thirdOthers = [fracTop, fracMid, fracBot].filter(v => v !== thirdMax);
-  const confined = geoEnergy > 0.5 && thirdMax > 0.9 && Math.max(...thirdOthers) < 0.1;
+  // The energy floor is deliberately low. Spatial confinement is the most reliable signal in
+  // this task: measured across mag 0.008..1.0, geometry puts fracMid at exactly 1.000 with the
+  // other thirds at 0.000, while typography splits 0.55/0.45 and spacing puts 0.927 in the
+  // bottom third. A displaced rigid block concentrates its whole difference in one third even
+  // when the displacement is a fifth of a pixel, so requiring much energy here would only
+  // re-hide low-severity geometry — which is exactly what an earlier `geoEnergy > 0.5` floor
+  // did. The floor exists solely to exclude byte-identical images, where every third is 0.
+  const confined = geoEnergy > 0.15 && thirdMax > 0.9 && Math.max(...thirdOthers) < 0.1;
 
   // --- 2. clean: essentially no difference anywhere -------------------------
-  if (!confined && geoEnergy < 1.2 && relChanged < 0.02 && Math.abs(relText) < 0.05) {
+  //
+  // `clean` must mean the two renders are effectively THE SAME IMAGE, so the gate is written
+  // to require that, not merely "no rule fired". It originally tested geoEnergy, relChanged and
+  // relText, all of which stay small at low defect severity — so a genuine typography defect at
+  // mag 0.022 (geoEnergy 0.64, relText -0.004, but 43 changed rows and a churn ratio of 67)
+  // satisfied every condition and was reported as clean before the typography rule ran.
+  //
+  // The honest additional requirement is that almost NO rows changed. A real edit moves many
+  // rows even when its per-pixel magnitude is small; a near-identical pair moves almost none.
+  // Measured: identical renders give changedRows 0, sub-pixel noise gives 5-16, and a genuine
+  // low-severity defect gives 43-58.
+  const CLEAN_MAX_CHANGED_ROWS = 20;
+  if (!confined && changedRows <= CLEAN_MAX_CHANGED_ROWS &&
+      geoEnergy < 1.2 && relChanged < 0.02 && Math.abs(relText) < 0.05) {
     return { label: 'clean', confidence: 0.95, reason: `near-identical (geoEnergy=${geoEnergy.toFixed(2)}, changedRows=${changedRows})`, features: m };
   }
 
@@ -458,20 +478,19 @@ export function decide(m) {
   //     geometry range and swallowed every geometry case. It is kept below only as a
   //     cheap upper bound on what this rule may claim.
   const churnRatio = geoEnergy > 0 ? changedRows / geoEnergy : Infinity;
-  // Precondition, in two parts, both derived from the sub-pixel regime:
+  // Preconditions, derived from the sub-pixel regime where these rules previously misfired.
   //
-  //   hadTextChurn   changedRows >= 24. Glyph re-rasterisation always moves many rows; a
-  //                  sub-pixel panel displacement moves few. Without this the ratio is
-  //                  undefined-ish at low severity and misclassifies displaced panels.
-  //   measurable     geoEnergy >= 0.6. Below this the images are effectively the same and
-  //                  `relText` is dominated by antialiasing reshuffling rather than by any
-  //                  real edit. Measured: geometry at mag 0.008 (0.14px) gives geoEnergy 0.38
-  //                  with relText +15.7%, and at mag 0.010 gives 0.47 with relText +11.1%.
-  //                  Neither is a font change; both are noise. Real typography at the eval
-  //                  band produces geoEnergy 0.86..2.5.
+  //   hadTextChurn  changedRows >= 24. Glyph re-rasterisation always moves many rows; a
+  //                 sub-pixel panel displacement moves few.
+  //
+  // An earlier attempt also required `geoEnergy >= 0.6`. That was too blunt: it fixed
+  // low-magnitude geometry but simultaneously blocked low-magnitude TYPOGRAPHY, which is
+  // genuinely detectable there (at mag 0.022 typography gives geoEnergy 0.64, changedRows 43
+  // and a ratio of 67). The discriminator between the two at low severity is not the energy
+  // but the row count: typography churns 40-58 rows while a 0.14px displacement churns 16.
+  // So the guard belongs on `changedRows` alone, which `hadTextChurn` already encodes.
   const hadTextChurn = changedRows >= 24;
-  const measurable = geoEnergy >= 0.6;
-  if (hadTextChurn && measurable && churnRatio > 50 && geoEnergy < 12) {
+  if (hadTextChurn && churnRatio > 50 && geoEnergy < 12) {
     push(`high row churn per unit structural energy (changedRows=${changedRows} / geo=${geoEnergy.toFixed(2)} = ${churnRatio.toFixed(1)}, text mass ${(relText * 100).toFixed(1)}%) -> in-place glyph re-rasterisation`);
     return { label: 'typography', confidence: 0.8, reason: notes.join('; '), features: m };
   }
@@ -481,11 +500,11 @@ export function decide(m) {
   // pixels without anything actually being re-rasterised. Measured: geometry at mag 0.008 gives
   // geoEnergy 0.4 with relText +15.7%, which the bare `|relText| > 0.08` test read as a font
   // change. Re-rasterising glyphs always changes rows; a sub-pixel displacement does not.
-  if (hadTextChurn && measurable && Math.abs(relText) > 0.08 && geoEnergy < 12) {
+  if (hadTextChurn && Math.abs(relText) > 0.08 && geoEnergy < 12) {
     push(`text mass changed ${(relText * 100).toFixed(1)}% across ${changedRows} rows with near-static layout (geo=${geoEnergy.toFixed(1)})`);
     return { label: 'typography', confidence: 0.8, reason: notes.join('; '), features: m };
   }
-  if (hadTextChurn && measurable && Math.abs(relText) > 0.18 && geoEnergy < 55) {
+  if (hadTextChurn && Math.abs(relText) > 0.18 && geoEnergy < 55) {
     push(`text mass changed ${(relText * 100).toFixed(1)}% across ${changedRows} rows with low displacement (geo=${geoEnergy.toFixed(1)})`);
     return { label: 'typography', confidence: 0.7, reason: notes.join('; '), features: m };
   }

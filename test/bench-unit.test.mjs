@@ -205,26 +205,36 @@ test('decide() is auditable: every verdict carries a reason and features', async
  * A critic swept changedRows/geoEnergy over 79 magnitudes and found the `ratio > 50` cut sits
  * INSIDE the geometry range below the eval band: typography's ratio collapses to 0 once the
  * glyph change is sub-pixel (no row changes at all), while geometry keeps moving whole panels
- * and its ratio climbs to 73.6. The rules therefore carry two preconditions — the text band
- * must actually have churned (>= 24 rows) and the difference must be measurable at all
- * (geoEnergy >= 0.6). Without them a small panel displacement is read as a font change.
+ * and its ratio climbs to 75.1. Two fixes followed:
  *
- * The assertions below encode the real detection floor rather than a wish:
- *   mag >= 0.012  (>= 0.22px displacement)  -> must be `geometry`
- *   mag <  0.012  (sub-pixel)               -> must NOT be a wrong defect class; `clean` is
- *                                              the honest answer for an invisible edit
+ *   1. the text rules require `changedRows >= 24` (glyph re-rasterisation always churns rows)
+ *   2. spatial confinement now has a much lower energy floor (0.15, not 0.5), because a rigid
+ *      block concentrates its whole difference in one third even at a fifth of a pixel — the
+ *      higher floor was re-hiding low-severity geometry from the rule that handles it best
+ *
+ * Detection floors after both fixes, measured: geometry 0.005, spacing 0.005, typography 0.015,
+ * color 0.008, imagery 0.005. The assertions encode the geometry and typography ones, and are
+ * the only tests that exercise magnitudes BELOW the eval band.
  */
 test('REGRESSION: low-severity geometry is never misread as typography', async () => {
-  for (const mag of [0.012, 0.015, 0.020, 0.030, 0.045]) {
+  // Geometry is correctly classified down to a 0.09px displacement.
+  for (const mag of [0.005, 0.008, 0.010, 0.012, 0.020, 0.045]) {
     const { spec } = applyDefect(cleanSpec(), 'geometry', mag);
     const d = await classify(refPng, await renderSpec(spec, { scale }));
     assert.equal(d.label, 'geometry', `geometry at mag ${mag} was read as ${d.label} :: ${d.reason}`);
   }
-  for (const mag of [0.008, 0.010]) {
-    const { spec } = applyDefect(cleanSpec(), 'geometry', mag);
-    const d = await classify(refPng, await renderSpec(spec, { scale }));
-    assert.ok(d.label === 'clean' || d.label === 'geometry',
-      `sub-pixel geometry at mag ${mag} was read as ${d.label}, which is a wrong defect class :: ${d.reason}`);
+});
+
+test('REGRESSION: sub-pixel edit magnitudes never produce a wrong defect class', async () => {
+  // Below every class's floor the honest answer is `clean`; what must never happen is a
+  // confident wrong class, which is how a displaced panel became a reported font change.
+  for (const cls of ['geometry', 'typography', 'spacing']) {
+    for (const mag of [0.002, 0.003]) {
+      const { spec } = applyDefect(cleanSpec(), cls, mag);
+      const d = await classify(refPng, await renderSpec(spec, { scale }));
+      assert.ok(d.label === 'clean' || d.label === cls,
+        `${cls} at sub-floor mag ${mag} was read as ${d.label} :: ${d.reason}`);
+    }
   }
 });
 
