@@ -14,7 +14,11 @@
     "demo": "node examples/demo.mjs",
     "test:unit": "node --test test/contracts-unit.test.mjs test/discrepancies.test.mjs test/scheduling.test.mjs test/hierarchy.test.mjs",
     "test:integration": "node --test test/codex.test.mjs test/core.test.mjs test/extensions.test.mjs test/hardening.test.mjs test/provenance-integration.test.mjs test/review-contract.test.mjs test/workflows-integration.test.mjs",
-    "test:coverage": "node --experimental-test-coverage --test-coverage-exclude=\"test/**\" --test-coverage-exclude=\"**/.uih/**\" --test test/*.test.mjs"
+    "test:coverage": "node --experimental-test-coverage --test-coverage-exclude=\"test/**\" --test-coverage-exclude=\"**/.uih/**\" --test test/*.test.mjs",
+    "bench": "node bench/run.mjs",
+    "bench:controls": "node bench/controls.mjs",
+    "bench:difficulty": "node bench/difficulty.mjs",
+    "eval": "node eval.mjs"
   },
   "dependencies": {
     "sharp": "0.35.4"
@@ -26,6 +30,8 @@
     "skills",
     "examples",
     "test",
+    "bench",
+    "eval.mjs",
     "README.md",
     "docs"
   ],
