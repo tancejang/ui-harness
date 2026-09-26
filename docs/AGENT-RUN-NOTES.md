@@ -286,9 +286,77 @@ The critic left debris at the repo root (`_critic_5cf/`, `_critic_head_out.txt`,
 against a pristine `git worktree`, which is the right instinct. Debris was removed.
 
 ### Still not addressed from that critic's report
-- `churnRatio > 50` is **not** in a gap outside the eval band: geometry's own ratio exceeds 50
-  at mag ≤ 0.012, peaking at 75.1. The comment claiming "geometry 24.0..45.0" is false there.
-- Adversarial cases: a hero that starts pale makes `imagery` undetectable; washing out the stat
-  cards instead of the hero reads as `clean`; combined defects collapse to one class.
+- Adversarial cases: washing out the stat cards instead of the hero reads as `clean`; combined
+  defects collapse to one class; a gradient hero is ambiguous.
 - The benchmark still measures synthetic SVG rectangles on one fixture layout, with no real
   screenshots, gradients, photography, or multi-defect cases.
+
+---
+
+## Cycle 5 — typography rules must not claim a displaced panel (pushed as `61d2f36`)
+
+Second of the third critic's findings, measured directly and found to be *worse* than reported:
+the critic said geometry's churn ratio peaks at 75.1; the measurement says **73.6 at mag 0.0085**
+with typography's ratio collapsing to **0.0** below mag 0.013. The judge's comment claiming
+"geometry ratio 24.0..45.0" was simply false outside the band.
+
+Cause: at low magnitude typography's glyph change is sub-pixel, so `changedRows` is 0, while
+geometry keeps moving whole panels and its ratio climbs. A bare `ratio > 50` test therefore sits
+*inside* the geometry range at low severity.
+
+Fix: all three text-mass rules gained a `changedRows >= 24` precondition — glyph re-rasterisation
+always churns many rows; a sub-pixel displacement does not. This is the **first test in the repo
+to exercise magnitudes below the eval band**, which is where the bug lived.
+
+## Cycle 6 — restore a gradient by lowering the floors (pushed as `0150aab`)
+
+Fixing cycle 5 exposed two more defects, both found by testing below the band:
+
+| Defect | Evidence | Fix |
+|---|---|---|
+| `clean` gate too permissive | typography at mag 0.022: `geoEnergy` 0.64, `relText` -0.004, but 43 changed rows and ratio 67 — every clean condition passed, so it was reported `clean` before the typography rule ran | clean now additionally requires `changedRows <= 20` (identical renders give 0, sub-pixel noise 5–16, real defects 43–58) |
+| confinement energy floor too high | geometry puts `fracMid` at **exactly 1.000** with other thirds at 0.000 at *every* magnitude, including mag 0.008 where `geoEnergy` is 0.385 — the 0.5 floor re-hid it from the rule that handles it best | floor lowered 0.5 → 0.15, still excluding byte-identical images |
+
+I also **reverted a mistake of my own** from cycle 5: a `measurable: geoEnergy >= 0.6`
+precondition. It fixed low-magnitude geometry but simultaneously blocked low-magnitude
+typography, which is genuinely detectable there. The real discriminator is the row count.
+
+**Detection floors after these fixes:**
+
+| class | before | after |
+|---|---|---|
+| geometry | 0.012 | **0.005** (a 0.09px displacement) |
+| spacing | 0.015 | **0.005** |
+| typography | 0.030 | **0.015** |
+| color | 0.008 | 0.008 |
+| imagery | 0.008 | 0.005 |
+
+The `[0.03, 0.06]` band then saturated (5/5 down to mag 0.02), so the band moved a third time to
+**`[0.01, 0.02]`**, restoring a genuine gradient: **EVAL 0.9167** with typography the sole weak
+class at 50% failure. `seed-sweep.mjs` correctly reports `has headroom` rather than `SATURATED`,
+which also proves the exit-code gate now works — it was a literal no-op when the critic found it.
+
+## Bounded blind spot: pale hero panels defeat `imagery`
+
+The critic's D1 finding — imagery undetectable when the hero starts pale — was measured rather
+than guessed at, by `bench/verify-imagery-pale.mjs` (6 panel colours × 5 severities):
+
+- imagery detected in **15/30** combinations;
+- **every single miss is on a near-neutral panel** (saturation 0.011–0.033);
+- **zero misses on a saturated panel**;
+- for a panel already at the overlay colour, `dSat` is exactly **-0.000** — the wash-out is a
+  mathematical no-op, so *no* saturation-based algorithm could detect it.
+
+So it is a limitation of the defect **model**, not a coding bug, and it cannot be fixed by moving
+a threshold without breaking the saturated cases. Documented as such. `verify-palette.mjs`'s
+21/200 misses are the same degenerate cases, not independent failures.
+
+## Consolidated state
+
+- **13 commits pushed to `main`**; local HEAD == `origin/main` at every checkpoint.
+- 6 recorded cycles in `.uih/agent/`, each with before/after scores and a critic verdict, rendered
+  into `.uih/agent/progress.html`.
+- Current benchmark: TRAIN 1.0000, **EVAL 0.9167** (12-seed sweep mean), constant 0.1667,
+  random 0.0833, 6 classes × 4 cases per split, band ceiling 24/24 distinct images per class.
+- `npm test`: **117 passing** (was 95 at the start).
+- Every score line carries all five required values; baseline sanity is asserted, not assumed.
